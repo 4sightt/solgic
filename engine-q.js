@@ -75,8 +75,8 @@ function installQuadEngineInfoPatch(){
   function patch(){
     const el=document.getElementById('fileInfo'); if(!el)return;
     const modeSel=document.getElementById('modeSel'), mode=modeSel?modeSel.value:'';
-    const loaded=[]; if(typeof window.ENGINE_2G_VERSION!=='undefined')loaded.push(window.ENGINE_2G_VERSION); if(typeof window.ENGINE_Q_VERSION!=='undefined')loaded.push(window.ENGINE_Q_VERSION);
-    let active='—'; if(mode==='q')active=window.ENGINE_Q_VERSION||'engine-q.js not loaded'; else if(mode==='2g')active=window.ENGINE_2G_VERSION||'engine-2g.js not loaded'; else if(mode==='w')active='no W engine'; else active='no Normal engine';
+    const loaded=[]; if(typeof window.ENGINE_2G_VERSION!=='undefined')loaded.push(window.ENGINE_2G_VERSION); if(typeof window.ENGINE_Q_VERSION!=='undefined')loaded.push(window.ENGINE_Q_VERSION); if(typeof window.ENGINE_2C_VERSION!=='undefined')loaded.push(window.ENGINE_2C_VERSION);
+    let active='—'; if(mode==='q')active=window.ENGINE_Q_VERSION||'engine-q.js not loaded'; else if(mode==='2g')active=window.ENGINE_2G_VERSION||'engine-2g.js not loaded'; else if(mode==='2c')active=window.ENGINE_2C_VERSION||'engine-2c.js not loaded'; else if(mode==='w')active='no W engine'; else active='no Normal engine';
     const next=`Active Engine: ${active} | Loaded: ${loaded.length?loaded.join(' | '):'—'} | App: ${document.title||'Solgic3'}`;
     if(el.textContent!==next)el.textContent=next;
   }

@@ -80,6 +80,7 @@ End memo.
             <option value="q">Q</option>
             <option value="w">W</option>
             <option value="2g">2G</option>
+            <option value="2c">2C</option>
           </select>
         </label>
         <label style="display:flex; align-items:center; gap:8px; font-size:17px; color:var(--muted)">
@@ -134,6 +135,7 @@ End memo.
 
 <script src="engine-2g.js"></script>
 <script src="engine-q.js"></script>
+<script src="engine-2c.js"></script>
 <script>
 (() => {
   const boardEl = document.getElementById('board');
@@ -158,7 +160,8 @@ End memo.
     normal:{label:'Normal', ioMode:'N'},
     q:{label:'Q', ioMode:'Q'},
     w:{label:'W', ioMode:'W'},
-    '2g':{label:'2G', ioMode:'2G'}
+    '2g':{label:'2G', ioMode:'2G'},
+    '2c':{label:'2C', ioMode:'2C'}
   };
 
   const STATE = {
@@ -185,6 +188,7 @@ End memo.
     const engines = [];
     if (typeof ENGINE_2G_VERSION !== 'undefined') engines.push(ENGINE_2G_VERSION);
     if (typeof ENGINE_Q_VERSION !== 'undefined') engines.push(ENGINE_Q_VERSION);
+    if (typeof ENGINE_2C_VERSION !== 'undefined') engines.push(ENGINE_2C_VERSION);
     fileInfo.textContent = `Engine: ${engines.length ? engines.join(' | ') : '—'} | App: ${appVer}`;
   }
 
@@ -564,6 +568,7 @@ End memo.
     }else{
       if(m === 'Q') setMode('q');
       else if(m === '2G') setMode('2g');
+      else if(m === '2C') setMode('2c');
       else setMode('normal');
       loadNormalBoard(obj.board,n);
     }
@@ -700,6 +705,9 @@ End memo.
     }else if(STATE.mode === '2g'){
       if(typeof infer2G !== 'function') out = {ok:false, checkLines:['engine-2g.js not loaded'], safe:[], mine:[], sol:0};
       else out = infer2G(io);
+    }else if(STATE.mode === '2c'){
+      if(typeof infer2C !== 'function') out = {ok:false, checkLines:['engine-2c.js not loaded'], safe:[], mine:[], sol:0};
+      else out = infer2C(io);
     }else{
       out = {note:'(no engine)', safe:[], mine:[]};
     }
