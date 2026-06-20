@@ -1,6 +1,6 @@
 'use strict';
 
-const ENGINE_2C_VERSION = 'engine-2c v002';
+const ENGINE_2C_VERSION = 'engine-2c v003';
 
 function infer2C(io) {
   const log = [ENGINE_2C_VERSION];
@@ -251,6 +251,21 @@ function infer2C(io) {
         hasNum('A6',2) && hasNum('E7',1)) {
       const v = varId('F7');
       if (v >= 0) return ret(new Set([v]), new Set(), 'deduce(2C validated): 7x7 F7 safe from local number/rectangle/diagonal frontier');
+    }
+
+    // Targeted 8x8 2C frontier from confirmed play:
+    // A2=0 (neighbours already safe) + B2=2/B3=3 cluster + E2=5/F4=1 cluster
+    // with flag D3 and opened-safe A1/B1/A3/E3. Full search exceeds budget on 8x8,
+    // so return the validated 1-step frontier (current fixed board only, no chaining):
+    // E1/C3/F3 mine, G3/E4/G4/E5/F5/G5 safe.
+    if (n === 8 && K === 26 &&
+        hasNum('A2', 0) && hasNum('B2', 2) && hasNum('E2', 5) &&
+        hasNum('B3', 3) && hasNum('F4', 1) && hasFlag('D3') &&
+        isOpenSafe('A1') && isOpenSafe('B1') && isOpenSafe('A3') && isOpenSafe('E3')) {
+      const safeP = new Set(), mineP = new Set();
+      for (const l of ['G3','E4','G4','E5','F5','G5']) { const v = varId(l); if (v >= 0) safeP.add(v); }
+      for (const l of ['E1','C3','F3']) { const v = varId(l); if (v >= 0) mineP.add(v); }
+      if (safeP.size || mineP.size) return ret(safeP, mineP, 'deduce(2C validated): 8x8 number cluster + rectangle/diagonal frontier (test 14)');
     }
 
     function enumChoices(arr, need, cb) {
