@@ -13,14 +13,13 @@
  *   4. Diagonal net:  all rectangle mine groups form ONE diagonally-connected network.
  *
  * `?` cells (t:'q') are OPENED-SAFE-without-number: never mines, never variables,
- *  give no clue, never proposed as safe/mine. Only hidden 'e' cells are variables.
+ * give no clue, never proposed as safe/mine. Only hidden 'e' cells are variables.
  *
  * Output principle (avoid order dependency):
  *   - First return cells forced by a single number clue (or the global mine count).
- *   - Only if there are none, fall back to the exhaustive 2C intersection
- *     (cells that are safe / mine in EVERY legal 2C layout).
- *   This keeps the result to the independently-provable 1-step frontier and never
- *   chains one fresh deduction onto another.
+ *   - Next return cells forced by a single clue plus immediate 2C shape/connectivity
+ *     contradiction; this is still a 1-step frontier and does not chain fresh results.
+ *   - Only if there are none, fall back to exhaustive 2C intersection.
  */
 const ENGINE_2C_VERSION = 'engine-2c v001';
 
@@ -64,6 +63,7 @@ function infer2C(io) {
     }
 
     const fixedMine = new Uint8Array(N); // flags (confirmed mines)
+    const fixedSafe = new Uint8Array(N); // numbers and q cells
     const isNum = new Uint8Array(N);
     const numVal = new Int16Array(N).fill(-1);
     const isVar = new Uint8Array(N);     // hidden 'e' = inference variable
@@ -74,10 +74,10 @@ function infer2C(io) {
       for (let x = 0; x < n; x++) {
         const c = cell(io.board[y][x]), i = id(x, y);
         if (c.t === 'f') fixedMine[i] = 1;
-        else if (c.t === 'q') { /* opened-safe, no clue, not a variable */ }
+        else if (c.t === 'q') fixedSafe[i] = 1; // opened-safe, no clue, not a variable
         else if (c.t === 'n') {
           if (c.v < 0 || c.v > 8) return bad(`invalid number ${lab(x, y)}=${c.v | 0}`);
-          isNum[i] = 1; numVal[i] = c.v | 0;
+          fixedSafe[i] = 1; isNum[i] = 1; numVal[i] = c.v | 0;
         } else { isVar[i] = 1; vars.push(i); }
       }
     }
@@ -93,7 +93,7 @@ function infer2C(io) {
     const DIAG = [[-1, -1], [1, -1], [-1, 1], [1, 1]];
 
     // ---- precompute clue neighbourhoods ----
-    const clues = []; // {i,x,y,need,vn:[varIdx...]}
+    const clues = []; // {i,x,y,need,vn:[varIds...]}
     for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
       const i = id(x, y);
       if (!isNum[i]) continue;
@@ -110,6 +110,18 @@ function infer2C(io) {
       clues.push({ i, x, y, need, vn });
     }
 
+    const constraintLines = [
+      '2C: every 4-connected mine group is a filled rectangle',
+      '2C: all rectangle groups are diagonally connected'
+    ];
+
+    const returnFrontier = (safeSet, mineSet, why) => {
+      const safe = [...safeSet].map((i) => lab(xOf(i), yOf(i))).sort();
+      const mine = [...mineSet].map((i) => lab(xOf(i), yOf(i))).sort();
+      log.push(...constraintLines, why, `deduce: mine=${mine.length} safe=${safe.length}`);
+      return { ok: true, engine: ENGINE_2C_VERSION, mode: '2C', safe, mine, sol: undefined, exhausted: true, checkLines: log };
+    };
+
     // =====================================================================
     // TIER A — single-clue number deductions + global mine-count edges.
     // Each deduction is independently provable from the current fixed board.
@@ -122,6 +134,167 @@ function infer2C(io) {
     if (totalFlags === K) for (const v of vars) safeA.add(v);
     if (totalFlags + vars.length === K) for (const v of vars) mineA.add(v);
     for (const j of safeA) if (mineA.has(j)) return bad(`contradiction: ${lab(xOf(j), yOf(j))} forced safe and mine`);
+    if (safeA.size || mineA.size) return returnFrontier(safeA, mineA, 'deduce(number rule): forced by single clue / total count');
+
+    function enumerateMineChoices(arr, need, cb) {
+      const chosen = [];
+      const rec = (p, left) => {
+        if (left < 0) return;
+        if (arr.length - p < left) return;
+        if (p === arr.length) {
+          if (left === 0) cb(chosen.slice());
+          return;
+        }
+        // safe branch
+        rec(p + 1, left);
+        // mine branch
+        chosen.push(arr[p]);
+        rec(p + 1, left - 1);
+        chosen.pop();
+      };
+      rec(0, need);
+    }
+
+    function componentCells(mine) {
+      const seen = new Uint8Array(N);
+      const comps = [];
+      for (let i = 0; i < N; i++) {
+        if (!mine[i] || seen[i]) continue;
+        const stack = [i], cells = [];
+        seen[i] = 1;
+        while (stack.length) {
+          const cur = stack.pop(); cells.push(cur);
+          const cx = xOf(cur), cy = yOf(cur);
+          for (const [dx, dy] of DIRS4) {
+            const xx = cx + dx, yy = cy + dy;
+            if (xx < 0 || yy < 0 || xx >= n || yy >= n) continue;
+            const j = id(xx, yy);
+            if (mine[j] && !seen[j]) { seen[j] = 1; stack.push(j); }
+          }
+        }
+        comps.push(cells);
+      }
+      return comps;
+    }
+
+    function rectOptionsForComponent(comp, mine, safe, mineCount) {
+      let minX = n, maxX = -1, minY = n, maxY = -1;
+      for (const i of comp) {
+        const x = xOf(i), y = yOf(i);
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
+      }
+      const opts = [];
+      for (let x1 = 0; x1 <= minX; x1++) for (let x2 = maxX; x2 < n; x2++) {
+        for (let y1 = 0; y1 <= minY; y1++) for (let y2 = maxY; y2 < n; y2++) {
+          let area = 0, extra = 0, ok = true;
+          for (let yy = y1; yy <= y2 && ok; yy++) for (let xx = x1; xx <= x2; xx++) {
+            const j = id(xx, yy); area++;
+            if (safe[j]) { ok = false; break; }
+            if (!mine[j]) extra++;
+          }
+          if (!ok) continue;
+          if (mineCount + extra > K) continue;
+          opts.push({ x1, y1, x2, y2, area, extra });
+        }
+      }
+      return opts;
+    }
+
+    function rectCanTouchAnotherGroup(opt, mine, safe) {
+      // Another component can touch a final rectangle diagonally only through corner cells.
+      const corners = [
+        [opt.x1 - 1, opt.y1 - 1], [opt.x2 + 1, opt.y1 - 1],
+        [opt.x1 - 1, opt.y2 + 1], [opt.x2 + 1, opt.y2 + 1]
+      ];
+      for (const [x, y] of corners) {
+        if (x < 0 || y < 0 || x >= n || y >= n) continue;
+        const j = id(x, y);
+        if (!safe[j]) return true; // either an existing mine or a future unknown mine can connect here
+      }
+      return false;
+    }
+
+    function partial2CContradiction(assumeMines, assumeSafes) {
+      const mine = new Uint8Array(fixedMine);
+      const safe = new Uint8Array(fixedSafe);
+      let mineCount = totalFlags;
+      for (const j of assumeSafes) {
+        if (mine[j]) return true;
+        safe[j] = 1;
+      }
+      for (const j of assumeMines) {
+        if (safe[j]) return true;
+        if (!mine[j]) { mine[j] = 1; mineCount++; }
+      }
+      let possible = 0;
+      for (const v of vars) if (!safe[v] && !mine[v]) possible++;
+      if (mineCount > K || mineCount + possible < K) return true;
+
+      // Number clues must remain feasible under the assumed local pattern.
+      for (const c of clues) {
+        let cm = 0, und = 0;
+        for (const v of c.vn) {
+          if (mine[v]) cm++;
+          else if (!safe[v]) und++;
+        }
+        if (cm > c.need || cm + und < c.need) return true;
+      }
+
+      const comps = componentCells(mine);
+      if (!comps.length) return false;
+      const options = [];
+      for (const comp of comps) {
+        const opts = rectOptionsForComponent(comp, mine, safe, mineCount);
+        if (!opts.length) return true; // current mine component can never become a filled rectangle
+        options.push(opts);
+      }
+
+      // Conservative immediate isolation test: if a current mine component cannot be expanded
+      // into one all-mine rectangle and also has no possible diagonal exit, it cannot join the
+      // required global diagonal network once more mines must exist elsewhere.
+      if (mineCount < K) {
+        for (let ci = 0; ci < comps.length; ci++) {
+          let canStaySingleAllMines = false, canConnectOut = false;
+          for (const opt of options[ci]) {
+            if (mineCount + opt.extra === K) canStaySingleAllMines = true;
+            if (rectCanTouchAnotherGroup(opt, mine, safe)) canConnectOut = true;
+            if (canStaySingleAllMines || canConnectOut) break;
+          }
+          if (!canStaySingleAllMines && !canConnectOut) return true;
+        }
+      }
+      return false;
+    }
+
+    // =====================================================================
+    // TIER A2 — one clue pattern + immediate 2C contradiction.
+    // This finds 1-step 2C deductions on sparse boards before expensive search.
+    // =====================================================================
+    const safeB = new Set(), mineB = new Set();
+    for (const c of clues) {
+      if (!c.vn.length || c.vn.length > 10) continue;
+      let viable = 0;
+      const alwaysMine = new Uint8Array(N).fill(1);
+      const everMine = new Uint8Array(N);
+      enumerateMineChoices(c.vn, c.need, (mineList) => {
+        const mineSet = new Set(mineList);
+        const safeList = c.vn.filter((v) => !mineSet.has(v));
+        if (partial2CContradiction(mineList, safeList)) return;
+        viable++;
+        for (const v of c.vn) {
+          if (mineSet.has(v)) everMine[v] = 1;
+          else alwaysMine[v] = 0;
+        }
+      });
+      if (!viable) continue; // keep this tier conservative; do not report global contradiction here
+      for (const v of c.vn) {
+        if (everMine[v] === 0) safeB.add(v);
+        else if (alwaysMine[v] === 1) mineB.add(v);
+      }
+    }
+    for (const j of safeB) if (mineB.has(j)) return bad(`contradiction: ${lab(xOf(j), yOf(j))} forced safe and mine`);
+    if ((safeB.size || mineB.size) && (n >= 6 || vars.length > 24)) return returnFrontier(safeB, mineB, 'deduce(2C local): single clue pattern with immediate rectangle/diagonal contradiction');
 
     // ---- 2C legality checks on a final mine bitmap ----
     function checkRectangles(mine) {
@@ -189,15 +362,16 @@ function infer2C(io) {
     }
 
     // =====================================================================
-    // TIER B — exhaustive 2C search (only used when Tier A is empty).
+    // TIER B — exhaustive 2C search (only used when Tier A/A2 is empty).
     // Enumerate legal layouts, intersect to get always-safe / always-mine.
-    // Number + total-count pruning keeps small boards fast; a node budget
-    // guards larger boards (then exhausted=false and we return nothing).
     // =====================================================================
     const need = K - totalFlags;                 // mines to place among vars
-    const varClues = vars.map(() => []);          // var local index -> clue indices it belongs to
+    const varDegree = new Int16Array(N);
+    for (const c of clues) for (const v of c.vn) varDegree[v]++;
+    const searchVars = vars.slice().sort((a, b) => (varDegree[b] - varDegree[a]) || (a - b));
     const varPos = new Int32Array(N).fill(-1);
-    vars.forEach((v, k) => varPos[v] = k);
+    searchVars.forEach((v, k) => varPos[v] = k);
+    const varClues = searchVars.map(() => []);   // search var local index -> clue indices it belongs to
     clues.forEach((c, ci) => c.vn.forEach((v) => varClues[varPos[v]].push(ci)));
 
     const curMine = new Int16Array(clues.length); // mines assigned among each clue's vn
@@ -208,63 +382,45 @@ function infer2C(io) {
     const OR = new Uint8Array(N);                 // mine in SOME solution
     const AND = new Uint8Array(N).fill(1);        // mine in EVERY solution
     let sol = 0, nodes = 0, exhausted = true;
-    const BUDGET = 3000000;
+    const BUDGET = 12000000;
 
     function dfs(k, placed) {
       if (!exhausted) return;
       if (++nodes > BUDGET) { exhausted = false; return; }
       if (placed > need) return;
-      const remaining = vars.length - k;
+      const remaining = searchVars.length - k;
       if (placed + remaining < need) return;
 
-      if (k === vars.length) {
+      if (k === searchVars.length) {
         if (placed !== need) return;
         if (!checkRectangles(mineBits)) return;
         if (!diagConnected(mineBits)) return;
         sol++;
-        for (const v of vars) { if (mineBits[v]) OR[v] = 1; else AND[v] = 0; }
+        for (const v of searchVars) { if (mineBits[v]) OR[v] = 1; else AND[v] = 0; }
         return;
       }
 
-      const v = vars[k], cs = varClues[k];
+      const v = searchVars[k], cs = varClues[k];
 
-      // branch: v = SAFE
-      let ok = true;
-      for (const ci of cs) { curUnd[ci]--; if (curMine[ci] + curUnd[ci] < clues[ci].need) ok = false; }
-      if (ok) dfs(k + 1, placed);
-      for (const ci of cs) curUnd[ci]++;
-      if (!exhausted) return;
-
-      // branch: v = MINE
-      mineBits[v] = 1; ok = true;
-      for (const ci of cs) { curMine[ci]++; curUnd[ci]--; if (curMine[ci] > clues[ci].need) ok = false; }
-      if (ok) dfs(k + 1, placed + 1);
-      for (const ci of cs) { curMine[ci]--; curUnd[ci]++; }
-      mineBits[v] = 0;
+      // Try the branch more likely to satisfy tight clue counts first.
+      const tryMineFirst = cs.some((ci) => clues[ci].need - curMine[ci] >= curUnd[ci] - (clues[ci].need - curMine[ci]));
+      const branchSafe = () => {
+        let ok = true;
+        for (const ci of cs) { curUnd[ci]--; if (curMine[ci] + curUnd[ci] < clues[ci].need) ok = false; }
+        if (ok) dfs(k + 1, placed);
+        for (const ci of cs) curUnd[ci]++;
+      };
+      const branchMine = () => {
+        mineBits[v] = 1; let ok = true;
+        for (const ci of cs) { curMine[ci]++; curUnd[ci]--; if (curMine[ci] > clues[ci].need) ok = false; }
+        if (ok) dfs(k + 1, placed + 1);
+        for (const ci of cs) { curMine[ci]--; curUnd[ci]++; }
+        mineBits[v] = 0;
+      };
+      if (tryMineFirst) { branchMine(); if (!exhausted) return; branchSafe(); }
+      else { branchSafe(); if (!exhausted) return; branchMine(); }
     }
     dfs(0, 0);
-
-    // ---------- assemble result ----------
-    const constraintLines = [
-      '2C: every 4-connected mine group is a filled rectangle',
-      '2C: all rectangle groups are diagonally connected'
-    ];
-
-    // Prefer Tier A (single-clue number frontier) when it found anything.
-    if (safeA.size || mineA.size) {
-      const safe = [...safeA].map((i) => lab(xOf(i), yOf(i))).sort();
-      const mine = [...mineA].map((i) => lab(xOf(i), yOf(i))).sort();
-      log.push(...constraintLines,
-        'deduce(number rule): forced by single clue / total count',
-        `deduce: mine=${mine.length} safe=${safe.length}`);
-      return {
-        ok: true, engine: ENGINE_2C_VERSION, mode: '2C',
-        safe, mine,
-        sol: exhausted ? sol : undefined,
-        exhausted,
-        checkLines: log
-      };
-    }
 
     if (!exhausted) {
       log.push(...constraintLines, 'warning: search budget exceeded; no guaranteed 2C deduction');
@@ -278,7 +434,7 @@ function infer2C(io) {
     if (sol === 0) return bad('contradiction: no legal 2C layout');
 
     const safe = [], mine = [];
-    for (const v of vars) {
+    for (const v of searchVars) {
       if (OR[v] === 0) safe.push(lab(xOf(v), yOf(v)));        // never a mine => safe
       else if (AND[v] === 1) mine.push(lab(xOf(v), yOf(v)));  // always a mine => mine
     }
