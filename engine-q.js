@@ -1,329 +1,91 @@
-// engine-q.js — SOLGIC Quad solver engine
-// Interface: function inferQ(io) -> {ok, checkLines, mine:[], safe:[], sol}
-// io format: {mode:'Q', size:n, mines:k, board:[[{t,v},...],...]}
-// Tile types: t='e' unknown, t='n' number(v=k), t='f' flagged mine, t='q' opened safe
-//
-// Quad rule: every 2x2 block must contain at least one mine.
-
 'use strict';
-
-const ENGINE_Q_VERSION = 'engine-q v001';
-
+const ENGINE_Q_VERSION='engine-q v002';
 function inferQ(io){
-  const checkLines = [ENGINE_Q_VERSION];
-
+  const log=[ENGINE_Q_VERSION];
+  const bad=msg=>({ok:false,engine:ENGINE_Q_VERSION,checkLines:[ENGINE_Q_VERSION,msg],mine:[],safe:[],sol:0,exhausted:true});
   try{
-    const n = io && (io.size|0);
-    const minesTarget = io && (io.mines|0);
-
-    if(n < 5 || n > 8){
-      return fail(`unsupported size=${n}; Quad supports 5..8`);
+    const n=io&&(io.size|0), K=io&&(io.mines|0);
+    if(n<5||n>8)return bad(`unsupported size=${n}; Quad supports 5..8`);
+    if(!io||!Array.isArray(io.board)||io.board.length<n)return bad('invalid io.board');
+    if(K<0||K>n*n)return bad(`invalid mines=${K}`);
+    const R=1<<n,N=n*n,T=N+1;
+    const id=(x,y)=>y*n+x, lab=(x,y)=>String.fromCharCode(65+x)+String(y+1), xy=i=>[i%n,(i/n)|0];
+    const pc=new Uint8Array(R); for(let m=1;m<R;m++)pc[m]=pc[m>>1]+(m&1);
+    const fixed=new Int8Array(N).fill(-1), isN=new Uint8Array(N), val=new Int16Array(N).fill(-1), vars=[];
+    function cell(c){
+      if(c==null)return{t:'e'}; if(typeof c==='number')return{t:'n',v:c|0};
+      if(typeof c==='string'){const s=c.trim(); if(s==='.'||s===''||s.toLowerCase()==='e')return{t:'e'}; if(s==='?'||s.toLowerCase()==='q')return{t:'q'}; if(s.toUpperCase()==='F'||s.toLowerCase()==='f')return{t:'f'}; if(/^-?[0-9]+$/.test(s))return{t:'n',v:parseInt(s,10)|0}; return{t:'e'};}
+      const t=String(c.t||c.kind||'').toLowerCase();
+      if(t==='e'||t==='empty')return{t:'e'}; if(t==='q'||t==='?')return{t:'q'}; if(t==='f'||t==='flag')return{t:'f'};
+      if(t==='n'||t==='num'||t==='number')return{t:'n',v:Math.trunc(Number(c.v??c.value??0))}; return{t:'e'};
     }
-    if(!io || !Array.isArray(io.board) || io.board.length < n){
-      return fail('invalid io.board');
-    }
-    if(minesTarget < 0 || minesTarget > n*n){
-      return fail(`invalid mines=${minesTarget}`);
-    }
-
-    const N = n*n;
-    const idx = (x,y)=>y*n+x;
-    const xy = i => [i%n, (i/n)|0];
-    const lbl = (x,y)=>String.fromCharCode(65+x)+String(y+1);
-    const popcount = m => {
-      let c=0, v=m|0;
-      while(v){ v &= v-1; c++; }
-      return c;
-    };
-    const rowBits = (mask,y)=>BigInt(mask) << BigInt(y*n);
-
-    const fixed = new Int8Array(N).fill(-1); // -1 unknown, 0 safe, 1 mine
-    const isNum = new Uint8Array(N);
-    const numVal = new Int16Array(N).fill(-1);
-    const unknown = [];
-
-    function normCell(c){
-      if(c == null) return {t:'e'};
-      if(typeof c === 'number') return {t:'n', v:c|0};
-      if(typeof c === 'string'){
-        const s = c.trim();
-        if(s === '.' || s === '' || s.toLowerCase() === 'e') return {t:'e'};
-        if(s === '?' || s.toLowerCase() === 'q') return {t:'q'};
-        if(s.toUpperCase() === 'F' || s.toLowerCase() === 'f') return {t:'f'};
-        if(/^-?\d+$/.test(s)) return {t:'n', v:parseInt(s,10)|0};
-        return {t:'e'};
-      }
-      const t = String(c.t || c.kind || '').toLowerCase();
-      if(t === 'e' || t === 'empty') return {t:'e'};
-      if(t === 'q' || t === '?') return {t:'q'};
-      if(t === 'f' || t === 'flag') return {t:'f'};
-      if(t === 'n' || t === 'num' || t === 'number'){
-        return {t:'n', v:Math.trunc(Number(c.v ?? c.value ?? 0))};
-      }
-      return {t:'e'};
-    }
-
     for(let y=0;y<n;y++){
-      if(!Array.isArray(io.board[y]) || io.board[y].length < n){
-        return fail(`invalid board row ${y+1}`);
-      }
+      if(!Array.isArray(io.board[y])||io.board[y].length<n)return bad(`invalid board row ${y+1}`);
       for(let x=0;x<n;x++){
-        const c = normCell(io.board[y][x]);
-        const i = idx(x,y);
-        if(c.t === 'f'){
-          fixed[i] = 1;
-        }else if(c.t === 'q'){
-          fixed[i] = 0;
-        }else if(c.t === 'n'){
-          const v = c.v|0;
-          if(v < 0 || v > 8) return fail(`invalid number ${lbl(x,y)}=${v}`);
-          fixed[i] = 0;
-          isNum[i] = 1;
-          numVal[i] = v;
-        }else{
-          unknown.push(i);
-        }
+        const c=cell(io.board[y][x]), i=id(x,y);
+        if(c.t==='f')fixed[i]=1; else if(c.t==='q')fixed[i]=0; else if(c.t==='n'){if(c.v<0||c.v>8)return bad(`invalid number ${lab(x,y)}=${c.v|0}`); fixed[i]=0; isN[i]=1; val[i]=c.v|0;} else vars.push(i);
       }
     }
-
-    // Basic fixed-count bound.
-    let fixedMines = 0;
-    for(let i=0;i<N;i++) if(fixed[i] === 1) fixedMines++;
-    if(fixedMines > minesTarget){
-      return fail(`contradiction: flags=${fixedMines} exceed mines=${minesTarget}`);
-    }
-    if(fixedMines + unknown.length < minesTarget){
-      return fail(`contradiction: flags+unknown=${fixedMines+unknown.length} < mines=${minesTarget}`);
-    }
-
-    // Row masks that respect fixed safe/mine cells.
-    const baseRows = [];
-    const minRow = [];
-    const maxRow = [];
+    let fcnt=0; for(let i=0;i<N;i++)if(fixed[i]===1)fcnt++;
+    if(fcnt>K)return bad(`contradiction: flags=${fcnt} exceed mines=${K}`);
+    if(fcnt+vars.length<K)return bad(`contradiction: flags+unknown=${fcnt+vars.length} < mines=${K}`);
+    const rows=[],lo=[],hi=[];
     for(let y=0;y<n;y++){
-      const masks = [];
-      let mustOne = 0, mustZero = 0;
-      for(let x=0;x<n;x++){
-        const f = fixed[idx(x,y)];
-        if(f === 1) mustOne |= (1 << x);
-        else if(f === 0) mustZero |= (1 << x);
-      }
-      for(let m=0;m<(1<<n);m++){
-        if((m & mustOne) !== mustOne) continue;
-        if((m & mustZero) !== 0) continue;
-        masks.push(m);
-      }
-      if(!masks.length) return fail(`contradiction: row ${y+1} has no legal masks`);
-      baseRows[y] = masks;
-      let lo = Infinity, hi = -Infinity;
-      for(const m of masks){
-        const pc = popcount(m);
-        if(pc < lo) lo = pc;
-        if(pc > hi) hi = pc;
-      }
-      minRow[y] = lo;
-      maxRow[y] = hi;
+      let one=0,zero=0; const a=[];
+      for(let x=0;x<n;x++){const f=fixed[id(x,y)]; if(f===1)one|=1<<x; else if(f===0)zero|=1<<x;}
+      let mn=99,mx=-1; for(let m=0;m<R;m++){if((m&one)!==one||(m&zero)!==0)continue; a.push(m); if(pc[m]<mn)mn=pc[m]; if(pc[m]>mx)mx=pc[m];}
+      if(!a.length)return bad(`contradiction: row ${y+1} has no legal masks`); rows[y]=a; lo[y]=mn; hi[y]=mx;
     }
-
-    const suffixMin = Array(n+1).fill(0);
-    const suffixMax = Array(n+1).fill(0);
-    for(let y=n-1;y>=0;y--){
-      suffixMin[y] = suffixMin[y+1] + minRow[y];
-      suffixMax[y] = suffixMax[y+1] + maxRow[y];
-    }
-
-    // Number clues grouped by row.
-    const numsByRow = Array.from({length:n},()=>[]);
-    for(let y=0;y<n;y++){
-      for(let x=0;x<n;x++){
-        const i=idx(x,y);
-        if(isNum[i]) numsByRow[y].push({x,y,v:numVal[i]|0});
-      }
-    }
-
-    function hasBit(mask,x){ return ((mask >> x) & 1) !== 0; }
-    function countNumAt(x,y,upper,mid,lower){
-      let c = 0;
-      for(let dy=-1;dy<=1;dy++){
-        const yy = y + dy;
-        if(yy < 0 || yy >= n) continue;
-        const mask = dy < 0 ? upper : (dy > 0 ? lower : mid);
-        for(let dx=-1;dx<=1;dx++){
-          if(dx === 0 && dy === 0) continue;
-          const xx = x + dx;
-          if(xx < 0 || xx >= n) continue;
-          if(hasBit(mask,xx)) c++;
-        }
-      }
-      return c;
-    }
-
-    function validateNumRow(y,upper,mid,lower){
-      const row = numsByRow[y];
-      for(let k=0;k<row.length;k++){
-        const c = row[k];
-        if(countNumAt(c.x,c.y,upper,mid,lower) !== c.v) return false;
-      }
-      return true;
-    }
-
-    function validateQuadPair(upper,lower){
-      for(let x=0;x<n-1;x++){
-        if((((upper | lower) >> x) & 3) === 0) return false;
-      }
-      return true;
-    }
-
-    // Early contradiction checks on fixed cells only.
-    for(let y=0;y<n-1;y++){
-      let fixedSafe2x2 = false;
-      for(let x=0;x<n-1;x++){
-        const a=fixed[idx(x,y)], b=fixed[idx(x+1,y)], c=fixed[idx(x,y+1)], d=fixed[idx(x+1,y+1)];
-        if(a===0 && b===0 && c===0 && d===0){ fixedSafe2x2 = true; break; }
-      }
-      if(fixedSafe2x2) return fail('contradiction: a fixed-safe 2x2 block violates Quad');
-    }
-
-    // Exact row-DP enumeration. Each state stores all partial assignments that share:
-    // previous two row masks and total mine count so far.
-    let states = new Map();
-
-    for(const m0 of baseRows[0]){
-      const pc = popcount(m0);
-      if(pc + suffixMin[1] > minesTarget || pc + suffixMax[1] < minesTarget) continue;
-      const key = `-1,${m0},${pc}`;
-      const bits = rowBits(m0,0);
-      states.set(key, {pp:-1, p:m0, total:pc, count:1n, orBits:bits, andBits:bits});
-    }
-
-    if(states.size === 0) return fail('contradiction: no legal first row');
-
-    const STATE_BUDGET = 250000;
-    const TRANSITION_BUDGET = 2000000;
-    let transitions = 0;
-    let budgetExceeded = false;
-
+    const smin=Array(n+1).fill(0),smax=Array(n+1).fill(0); for(let y=n-1;y>=0;y--){smin[y]=smin[y+1]+lo[y]; smax[y]=smax[y+1]+hi[y];}
+    const clues=Array.from({length:n},()=>[]); let clueCnt=0;
+    for(let y=0;y<n;y++)for(let x=0;x<n;x++){const i=id(x,y); if(isN[i]){clues[y].push({x,y,v:val[i]|0}); clueCnt++;}}
+    const bit=(m,y)=>BigInt(m)<<BigInt(y*n), has=(m,x)=>((m>>x)&1)!==0;
+    function cnt(x,y,u,m,d){let c=0; for(let dy=-1;dy<=1;dy++){const yy=y+dy; if(yy<0||yy>=n)continue; const mask=dy<0?u:dy>0?d:m; for(let dx=-1;dx<=1;dx++){if(dx===0&&dy===0)continue; const xx=x+dx; if(xx>=0&&xx<n&&has(mask,xx))c++;}} return c;}
+    function clueOK(y,u,m,d){for(const c of clues[y])if(cnt(c.x,c.y,u,m,d)!==c.v)return false; return true;}
+    function quad(a,b){for(let x=0;x<n-1;x++)if((((a|b)>>x)&3)===0)return false; return true;}
+    for(let y=0;y<n-1;y++)for(let x=0;x<n-1;x++){const a=fixed[id(x,y)],b=fixed[id(x+1,y)],c=fixed[id(x,y+1)],d=fixed[id(x+1,y+1)]; if(a===0&&b===0&&c===0&&d===0)return bad(`contradiction: fixed-safe 2x2 at ${lab(x,y)}-${lab(x+1,y+1)} violates Quad`);}
+    const next=Array.from({length:n},()=>Array.from({length:R},()=>[]));
+    for(let y=1;y<n;y++)for(let p=0;p<R;p++)for(const m of rows[y])if(quad(p,m))next[y][p].push(m);
+    const cache=Array.from({length:n},()=>new Map()), key=(pp,p)=>((pp+1)<<n)|p;
+    function cand(y,pp,p){const k=key(pp,p),mp=cache[y]; if(mp.has(k))return mp.get(k); const src=next[y][p], r=y-1, u=pp>=0?pp:0; let out=src; if(clues[r].length){out=[]; for(const m of src)if(clueOK(r,u,p,m))out.push(m);} mp.set(k,out); return out;}
+    const enc=(pp,p,t)=>(((pp+1)*R+p)*T+t);
+    let states=new Map();
+    for(const m of rows[0]){const t=pc[m]; if(t+smin[1]>K||t+smax[1]<K)continue; const b=bit(m,0); states.set(m*T+t,{pp:-1,p:m,t,c:1n,o:b,a:b});}
+    if(!states.size)return bad('contradiction: no legal first row');
+    let trans=0,peak=states.size;
     for(let y=1;y<n;y++){
-      const next = new Map();
-
-      for(const st of states.values()){
-        for(const cur of baseRows[y]){
-          transitions++;
-          if(transitions > TRANSITION_BUDGET){
-            budgetExceeded = true;
-            break;
-          }
-
-          if(!validateQuadPair(st.p, cur)) continue;
-
-          // When current row y is assigned, row y-1 is fully checkable.
-          const upper = (y-2 >= 0) ? st.pp : 0;
-          if(!validateNumRow(y-1, upper, st.p, cur)) continue;
-
-          const pc = popcount(cur);
-          const total = st.total + pc;
-          if(total + suffixMin[y+1] > minesTarget) continue;
-          if(total + suffixMax[y+1] < minesTarget) continue;
-
-          const bits = rowBits(cur,y);
-          const newOr = st.orBits | bits;
-          const newAnd = st.andBits | bits;
-          const key = `${st.p},${cur},${total}`;
-          const old = next.get(key);
-          if(old){
-            old.count += st.count;
-            old.orBits |= newOr;
-            old.andBits &= newAnd;
-          }else{
-            next.set(key, {
-              pp: st.p,
-              p: cur,
-              total,
-              count: st.count,
-              orBits: newOr,
-              andBits: newAnd
-            });
-          }
-        }
-        if(budgetExceeded) break;
+      const ns=new Map();
+      for(const st of states.values())for(const m of cand(y,st.pp,st.p)){
+        trans++; const t=st.t+pc[m]; if(t+smin[y+1]>K||t+smax[y+1]<K)continue;
+        const b=bit(m,y), o=st.o|b, a=st.a|b, pp=clues[y].length?st.p:-1, k=enc(pp,m,t), old=ns.get(k);
+        if(old){old.c+=st.c; old.o|=o; old.a&=a;} else ns.set(k,{pp,p:m,t,c:st.c,o,a});
       }
-
-      if(budgetExceeded) break;
-      states = next;
-      if(states.size > STATE_BUDGET){
-        budgetExceeded = true;
-        break;
-      }
-      if(states.size === 0) return fail(`contradiction: no legal states after row ${y+1}`);
+      states=ns; if(states.size>peak)peak=states.size; if(!states.size)return bad(`contradiction: no legal states after row ${y+1}`);
     }
-
-    if(budgetExceeded){
-      checkLines.push('Quad: every 2x2 block has at least one mine');
-      checkLines.push('OK (budget exceeded)');
-      checkLines.push(`states=${states.size} transitions>${TRANSITION_BUDGET}`);
-      checkLines.push('deduce: mine=0 safe=0');
-      return {ok:true, checkLines, mine:[], safe:[], sol:0, exhausted:false};
-    }
-
-    let sol = 0n;
-    let globalOr = 0n;
-    let globalAnd = null;
-
-    for(const st of states.values()){
-      if(st.total !== minesTarget) continue;
-      if(!validateNumRow(n-1, n>=2 ? st.pp : 0, st.p, 0)) continue;
-
-      sol += st.count;
-      globalOr |= st.orBits;
-      globalAnd = (globalAnd === null) ? st.andBits : (globalAnd & st.andBits);
-    }
-
-    if(sol === 0n){
-      return fail('contradiction: no legal solutions');
-    }
-
-    const mine = [];
-    const safe = [];
-    for(const cell of unknown){
-      const bit = 1n << BigInt(cell);
-      const [x,y] = xy(cell);
-      if((globalAnd & bit) !== 0n) mine.push(lbl(x,y));
-      else if((globalOr & bit) === 0n) safe.push(lbl(x,y));
-    }
-
-    checkLines.push('Quad: every 2x2 block has at least one mine');
-    checkLines.push('OK');
-    checkLines.push(`solutions=${sol.toString()}`);
-    checkLines.push(`deduce: mine=${mine.length} safe=${safe.length}`);
-
-    return {
-      ok:true,
-      checkLines,
-      mine,
-      safe,
-      sol: sol <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(sol) : sol.toString(),
-      exhausted:true
-    };
-
-    function fail(msg){
-      return {ok:false, checkLines:[ENGINE_Q_VERSION, msg], mine:[], safe:[], sol:0, exhausted:true};
-    }
-  }catch(e){
-    return {
-      ok:false,
-      checkLines:[ENGINE_Q_VERSION, 'error: '+(e && e.message ? e.message : String(e))],
-      mine:[],
-      safe:[],
-      sol:0,
-      exhausted:true
-    };
+    let sol=0n, OR=0n, AND=null;
+    for(const st of states.values())if(st.t===K&&clueOK(n-1,n>=2?st.pp:0,st.p,0)){sol+=st.c; OR|=st.o; AND=AND===null?st.a:(AND&st.a);}
+    if(sol===0n)return bad('contradiction: no legal solutions');
+    const mine=[],safe=[]; for(const i of vars){const b=1n<<BigInt(i),p=xy(i); if((AND&b)!==0n)mine.push(lab(p[0],p[1])); else if((OR&b)===0n)safe.push(lab(p[0],p[1]));}
+    log.push('Quad: every 2x2 block has at least one mine','OK exact row-mask DP',`solutions=${sol.toString()}`,`states=${states.size} peak=${peak} transitions=${trans}`,`clues=${clueCnt} unknown=${vars.length}`,`deduce: mine=${mine.length} safe=${safe.length}`);
+    return{ok:true,engine:ENGINE_Q_VERSION,checkLines:log,mine,safe,sol:sol<=BigInt(Number.MAX_SAFE_INTEGER)?Number(sol):sol.toString(),exhausted:true};
+  }catch(e){return bad('error: '+(e&&e.message?e.message:String(e)));}
+}
+function installQuadEngineInfoPatch(){
+  if(typeof window==='undefined'||typeof document==='undefined')return;
+  function patch(){
+    const el=document.getElementById('fileInfo'); if(!el)return;
+    const modeSel=document.getElementById('modeSel'), mode=modeSel?modeSel.value:'';
+    const loaded=[]; if(typeof window.ENGINE_2G_VERSION!=='undefined')loaded.push(window.ENGINE_2G_VERSION); if(typeof window.ENGINE_Q_VERSION!=='undefined')loaded.push(window.ENGINE_Q_VERSION);
+    let active='—'; if(mode==='q')active=window.ENGINE_Q_VERSION||'engine-q.js not loaded'; else if(mode==='2g')active=window.ENGINE_2G_VERSION||'engine-2g.js not loaded'; else if(mode==='w')active='no W engine'; else active='no Normal engine';
+    const next=`Active Engine: ${active} | Loaded: ${loaded.length?loaded.join(' | '):'—'} | App: ${document.title||'Solgic3'}`;
+    if(el.textContent!==next)el.textContent=next;
   }
+  function bind(){
+    const el=document.getElementById('fileInfo'), modeSel=document.getElementById('modeSel'); if(!el)return false;
+    let busy=false; new MutationObserver(()=>{if(busy)return; busy=true; setTimeout(()=>{patch(); busy=false;},0);}).observe(el,{childList:true,characterData:true,subtree:true});
+    if(modeSel)modeSel.addEventListener('change',()=>setTimeout(patch,0)); patch(); return true;
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>{bind(); setTimeout(patch,0);}); else if(!bind())setTimeout(()=>{bind(); setTimeout(patch,0);},0);
 }
-
-if(typeof window !== 'undefined'){
-  window.ENGINE_Q_VERSION = ENGINE_Q_VERSION;
-  window.inferQ = inferQ;
-}
-if(typeof module !== 'undefined' && module.exports){
-  module.exports = {ENGINE_Q_VERSION, inferQ};
-}
+if(typeof window!=='undefined'){window.ENGINE_Q_VERSION=ENGINE_Q_VERSION; window.inferQ=inferQ; installQuadEngineInfoPatch();}
+if(typeof module!=='undefined'&&module.exports)module.exports={ENGINE_Q_VERSION,inferQ};
