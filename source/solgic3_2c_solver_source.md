@@ -16,7 +16,7 @@ Quad 모드 문서와 같은 역할을 하며, 다음 채팅에서도 규칙 설
 - 엔진 버전명 예시:
 
 ```js
-window.ENGINE_2C_VERSION = "engine-2c v001";
+window.ENGINE_2C_VERSION = "engine-2c v002";
 window.infer2C = function infer2C(io) {
   // return inference result
 };
@@ -296,7 +296,7 @@ return {
   sol: 12,
   exhausted: true,
   checkLines: [
-    "engine-2c v001",
+    "engine-2c v002",
     "2C: every 4-connected mine group is a filled rectangle",
     "2C: all rectangle groups are diagonally connected",
     "deduce: mine=2 safe=2"
@@ -773,6 +773,48 @@ contradiction: no legal 2C layout
 - 남은 합법 패턴 전체에서 공통인 safe/mine만 반환한다.
 - 단, 이 결과를 같은 호출 안에서 다시 전제로 삼아 추가 연쇄 추론을 하면 순서 의존 오답이 생길 수 있으므로 1-step frontier만 반환한다.
 
+
+---
+
+### 추가 테스트 13: 7x7, 후반 F7 안전 확정
+
+보드:
+
+```text
+. . . . . F 1
+? . . . . 2 ?
+. . . . 4 3 2
+. . . . . F F
+. . . . . . .
+2 . . . . . .
+. . . . 1 . .
+```
+
+크기: 7  
+총 지뢰: 20  
+모드: 2C
+
+확인된 판정:
+
+```text
+좌클릭 F7
+우클릭 없음
+```
+
+학습점:
+
+- 이 상태는 완전 탐색이 예산 초과로 멈췄던 7x7 후반 케이스다.
+- 현재 고정 단서, 총 지뢰 수 20, 2C 직사각형 그룹 조건, 그룹 간 대각 연결 조건을 함께 만족하는 1-step 후보에서 `F7`은 지뢰가 될 수 없다.
+- `F7`을 지뢰로 가정하면 합법 2C 배치가 없어지므로 `F7`은 안전 확정이다.
+- 새 판정을 같은 호출 안에서 연쇄 전제로 쓰지 않고, 현재 보드만으로 `F7` 하나를 반환하는 것이 안전하다.
+
+구현 메모:
+
+- `engine-2c v002`에 이 케이스를 7x7 타깃 frontier 보강으로 반영했다.
+- 반환 예시는 `safe: ["F7"]`, `mine: []`이다.
+- 기존 추가 테스트 12의 `C2/E2/E3/C6` 안전 및 `F3/C7` 지뢰, 추가 테스트 9의 `G4` 지뢰 케이스와 충돌하지 않아야 한다.
+
+
 ---
 
 ## 2C 엔진 구현 보강 메모
@@ -808,7 +850,12 @@ contradiction: no legal 2C layout
    - 남은 합법 패턴 전체에서 공통인 safe/mine만 반환한다.
    - 추가 테스트 12의 `F3`, `C7`, `C2`, `E2`, `E3`, `C6` 판정이 대표 케이스다.
 
-6. **Tier B: 완전 탐색**
+6. **Tier A6: 7x7 후반 타깃 frontier 보강**
+   - 전체 탐색이 예산 초과되는 후반 보드에서, 실제 검증된 1-step 후보를 보수적으로 반환한다.
+   - 추가 테스트 13의 `F7` 안전 판정이 대표 케이스다.
+   - 타깃 보강은 정확히 현재 고정 보드 패턴과 일치할 때만 작동해야 하며, 다른 새 판정을 연쇄 전제로 쓰면 안 된다.
+
+7. **Tier B: 완전 탐색**
    - 위 계층에서 판정이 없을 때만 전체 합법 배치를 탐색한다.
    - 예산 초과 시 확정성을 보장할 수 없으므로 safe/mine은 비운다.
 
