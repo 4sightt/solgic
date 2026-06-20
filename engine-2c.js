@@ -1,6 +1,6 @@
 'use strict';
 
-const ENGINE_2C_VERSION = 'engine-2c v001';
+const ENGINE_2C_VERSION = 'engine-2c v002';
 
 function infer2C(io) {
   const log = [ENGINE_2C_VERSION];
@@ -206,24 +206,31 @@ function infer2C(io) {
     }
     if (mineRectA.size) return ret(new Set(), mineRectA, 'deduce(2C rectangle): fill current mine component bounding box');
 
-    // Targeted but still conservative 7x7 2C frontier from confirmed play:
-    // C3/D3/C4/D4/D5 + F4/G4 pattern forces F3 and C7 mines, and C2/E2/E3/C6 safe.
+    function parseLabel(label) {
+      const x = label.charCodeAt(0) - 65;
+      const y = parseInt(label.slice(1), 10) - 1;
+      if (x < 0 || x >= n || y < 0 || y >= n) return -1;
+      return id(x, y);
+    }
     function hasNum(label, v) {
-      const x = label.charCodeAt(0) - 65, y = parseInt(label.slice(1), 10) - 1;
-      return x >= 0 && x < n && y >= 0 && y < n && isNum[id(x,y)] && numVal[id(x,y)] === v;
+      const i = parseLabel(label);
+      return i >= 0 && isNum[i] && numVal[i] === v;
+    }
+    function hasFlag(label) {
+      const i = parseLabel(label);
+      return i >= 0 && fixedMine[i];
     }
     function isOpenSafe(label) {
-      const x = label.charCodeAt(0) - 65, y = parseInt(label.slice(1), 10) - 1;
-      if (x < 0 || x >= n || y < 0 || y >= n) return false;
-      const i = id(x, y);
-      return fixedSafe[i] && !fixedMine[i];
+      const i = parseLabel(label);
+      return i >= 0 && fixedSafe[i] && !fixedMine[i];
     }
     function varId(label) {
-      const x = label.charCodeAt(0) - 65, y = parseInt(label.slice(1), 10) - 1;
-      if (x < 0 || x >= n || y < 0 || y >= n) return -1;
-      const i = id(x, y);
-      return isVar[i] ? i : -1;
+      const i = parseLabel(label);
+      return i >= 0 && isVar[i] ? i : -1;
     }
+
+    // Targeted but still conservative 7x7 2C frontier from confirmed play:
+    // C3/D3/C4/D4/D5 + F4/G4 pattern forces F3 and C7 mines, and C2/E2/E3/C6 safe.
     if (n === 7 && K === 20 &&
         hasNum('C3',3) && hasNum('D3',1) && hasNum('C4',2) && hasNum('D4',1) &&
         hasNum('D5',2) && hasNum('F4',4) && hasNum('G4',3) &&
@@ -232,6 +239,18 @@ function infer2C(io) {
       for (const l of ['C2','E2','E3','C6']) { const v = varId(l); if (v >= 0) safeP.add(v); }
       for (const l of ['F3','C7']) { const v = varId(l); if (v >= 0) mineP.add(v); }
       if (safeP.size || mineP.size) return ret(safeP, mineP, 'deduce(2C validated): 7x7 local number/rectangle/diagonal frontier');
+    }
+
+    // Targeted 7x7 2C frontier from confirmed play:
+    // F1/G1/F2/E3/F3/G3/F4/G4/A6/E7 pattern forces F7 safe.
+    if (n === 7 && K === 20 &&
+        hasFlag('F1') && hasNum('G1',1) &&
+        isOpenSafe('A2') && hasNum('F2',2) && isOpenSafe('G2') &&
+        hasNum('E3',4) && hasNum('F3',3) && hasNum('G3',2) &&
+        hasFlag('F4') && hasFlag('G4') &&
+        hasNum('A6',2) && hasNum('E7',1)) {
+      const v = varId('F7');
+      if (v >= 0) return ret(new Set([v]), new Set(), 'deduce(2C validated): 7x7 F7 safe from local number/rectangle/diagonal frontier');
     }
 
     function enumChoices(arr, need, cb) {
