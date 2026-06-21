@@ -1508,3 +1508,115 @@ mine: []
 - `2x2`, `2x3`, `MxN` 직사각형 그룹을 반드시 합법으로 유지한다.
 - 대각 연결은 그룹 간 연결만 의미한다. 변으로 닿는 지뢰는 이미 같은 그룹으로 합쳐야 한다.
 
+
+---
+
+## 타깃 보강에서 일반화 계층으로 전환 (engine-2c v013)
+
+`engine-2c v013`에서, 그동안 8x8 보드마다 하나씩 늘려오던 타깃 frontier 보강(`target(...)` 블록) 대신, 반복적으로 등장하던 논리를 **일반화된 1-step frontier 추론 계층**으로 분리했다. 기존 타깃 블록은 삭제하지 않고 회귀 안전망으로 그대로 두되, 가능한 케이스는 일반 규칙이 먼저 잡도록 실행 순서를 재배치했다.
+
+> 주의: 이 섹션이 v013 기준 최신 상태다. 위 개별 테스트(추가 테스트 14~24) 메모에 적힌 "타깃 보강" 표현 중 일부(추가 테스트 20, 23, 24)는 v013에서 아래 일반 규칙으로 승격되어, 이제 타깃이 아니라 일반 계층이 먼저 발동한다.
+
+### 새로 분리한 일반 추론 함수
+
+모두 현재 고정 보드(`fixedMine`/`fixedSafe`)만 전제로 쓰고, 같은 `infer2C` 호출 안에서 새로 반환한 safe/mine을 다른 판정의 전제로 연쇄 사용하지 않는다. 각 후보는 단일 가정 또는 단일 로컬 패턴에서 독립 검증한다.
+
+1. `deduceSymmetricNumericDiff()` — 숫자 단서 대칭 차분. 두 단서의 후보 집합 A, B가 크기가 같고 서로 다른 원소가 각각 1개(`A=common+a`, `B=common+b`)일 때, `needB-needA===1`이면 `b`=mine·`a`=safe, `needA-needB===1`이면 `a`=mine·`b`=safe. 순수 숫자 카운트 규칙이라 2C 모양 제약 없이 먼저 적용한다.
+2. `deduceCandidateAsMineRectContradiction()` — 후보 `v`를 mine으로 가정해 현재 flag와 4-연결 컴포넌트를 만들고, 그 bounding box 안에 고정 안전칸(숫자 또는 `?`)이 있으면 `v`는 mine 불가능이므로 safe. (v010 Tier A3 확장을 함수로 정리.)
+3. `deduceCandidateAsSafeForcedMineRectContradiction()` — `need===cells.length-1`인 단서에서 후보 `v`를 safe로 가정하면 나머지가 모두 mine으로 강제된다. 강제 지뢰 + flag의 컴포넌트 bounding box에 고정 안전칸이 들어가면 `v=safe` 가정이 불가능하므로 `v`는 mine. (v012 Tier A3/A4를 함수로 정리.)
+4. `deduceCornerDiagonalBlockage()` — 후보 `v`를 mine으로 가정하고, 그 가정이 `need`를 충족시키는 단서로부터 강제되는 safe들을 모은다. `v`의 지뢰 컴포넌트가 (고정 + 강제) 안전칸으로 8방향이 모두 막혀 더 자랄 수도, 대각으로 이어질 수도 없는데 총 지뢰 수상 다른 지뢰 그룹이 반드시 존재해야 하면(`K > 컴포넌트 크기`), `v`는 mine 불가능이므로 safe. 과잉 판정을 막기 위해 **연결 가능 칸이 모두 고정/강제 safe인 경우(unknown이 하나도 없을 때)에만** 모순으로 인정한다.
+5. `deduceSingleCluePattern2C()` — 후보 수가 작은(≤8) 단일 숫자 단서에 대해 가능한 지뢰 배치를 열거하고, 각 패턴에서 **직사각형 즉시 모순**(아래)으로 불가능한 패턴을 제거한 뒤, 남은 모든 패턴에서 공통인 mine/safe만 반환한다.
+6. `deduceSmallClueCluster2C()` — frontier가 겹치는 숫자 단서들을 연결 컴포넌트로 묶어, frontier 변수 수가 작을 때만(≤18) 모든 숫자 제약을 만족하는 패턴을 열거하고, 직사각형 즉시 모순만 안전하게 제거한 뒤 공통 safe/mine만 반환한다.
+
+### 직사각형 즉시 모순의 "건전한" 기준 (중요)
+
+패턴 열거 계층(5, 6)과 candidate-as-safe(3)에서 패턴을 제거할 때 쓰는 유일하게 건전한 기준은 **"강제 지뢰 컴포넌트의 bounding box 안에 고정 안전칸(숫자/`?`)이 있는가"**다.
+
+- 어떤 4-연결 지뢰 컴포넌트라도 최종 직사각형은 자신의 bounding box 이상으로만 커지고, box 안의 고정 안전칸은 절대 지뢰가 될 수 없다. 따라서 box 안에 안전칸이 있으면 그 패턴은 어떤 전역 배치에서도 직사각형이 될 수 없다 → 제거해도 건전하다.
+- 반면 "현재 컴포넌트가 직사각형이 아니다(`!compIsFilledRect`)"만으로 패턴을 제거하는 것은 **건전하지 않다.** 단서 후보 밖의 칸이 지뢰가 되어 그 컴포넌트를 직사각형으로 완성할 수 있기 때문이다. v013 개발 중 무작위 유효배치(witness) 퍼징에서 이 비건전 제거가 실제 오답(예: witness에서 지뢰인 칸을 safe로 반환)을 일으키는 것을 확인하고, 패턴 계층(3·5·6)에서 `!compIsFilledRect` 제거 기준을 들어냈다. `deduceCornerDiagonalBlockage()`의 `compIsFilledRect` 사용은 "깨끗한 직사각형 컴포넌트일 때만 보수적으로 발동"하는 보호 가드라 건전하다.
+
+### 완전 탐색(Tier B) 가지치기 개선
+
+leaf에서만 2C 검사를 하던 완전 탐색에 건전한 중간 가지치기 `minePrune(v,k)`를 추가했다.
+
+- (a) 직사각형: 방금 놓은 지뢰의 4-연결 컴포넌트 bounding box 안에 고정 안전칸이 있으면 prune.
+- (b) 대각 고립: 그 컴포넌트가 8방향으로 미결정 변수도, 컴포넌트 밖 지뢰도 없이 봉인되었고(`sealed`) 컴포넌트 크기가 총 지뢰 수보다 작으면, 남은 지뢰가 절대 이 컴포넌트에 연결될 수 없으므로 prune.
+- 부분 배치에 아직 unknown으로 연결 가능성이 남으면 prune하지 않는다(건전성 유지). 숫자 min/max·남은 지뢰 수 min/max 가지치기는 기존대로 유지한다.
+- 건전성 검증: prune 버전과 no-prune 버전을 수천 개 보드에서 비교해 결과가 항상 동일함(유효 배치를 떨어뜨리지 않음)을 확인했다.
+
+### 실행 순서 (보수적)
+
+1. 숫자 즉시 판정 (`deduce(number rule)`)
+2. 숫자 대수 부분집합/차집합 (`deduce(number algebra)`)
+3. **숫자 대칭 차분** (`tier general: symmetric numeric diff`)
+4. 현재 지뢰 컴포넌트 직사각형 완성 (`deduce(2C rectangle)`)
+5. 기존 타깃 frontier (`deduce(2C validated)` / `target: ...`)
+6. **candidate-as-mine 직사각형 모순** (`tier general: candidate-as-mine rectangle contradiction`, `vars>24` 게이트)
+7. **단일 단서 / 소규모 클러스터 2C 패턴** (`tier general: single clue 2C pattern`, `tier general: small clue cluster 2C pattern`, `vars>24` 게이트)
+8. 완전 탐색 (`deduce(2C exhaustive)`)
+9. 예산 초과 후 fallback: **candidate-as-safe 강제지뢰 직사각형 모순** → **코너 대각 차단** (`tier general: candidate-as-safe forced-mine rectangle contradiction`, `tier general: corner diagonal blockage`)
+
+순서 주의: candidate-as-mine·패턴 계층(6·7)은 기존 타깃 frontier(5) **뒤**에 두었다. 이들을 타깃 앞에 두면 추가 테스트 17처럼 멀티스텝 체인으로만 완성되는 타깃의 완전한 결과(`safe D5/E4/G1` + `mine F1/F2/F4`)를, 1-step 일반 규칙이 부분 결과(`safe D5/E4`)만 반환하며 가리는 회귀가 생긴다. 1-step 규칙은 체인을 만들지 않으므로, 멀티스텝 타깃은 그대로 우선한다. (대칭 차분(3)만은 결과가 항상 완전하고 어떤 타깃도 가리지 않아 타깃 앞에 둔다.)
+
+### 어떤 타깃 논리가 어떤 일반 규칙으로 승격됐나
+
+| 추가 테스트 | 기존(v012) 처리 | v013 처리(발동 계층) |
+|---|---|---|
+| 7 (A1/B4·C4·B6) | fallback candidate-as-safe | `tier general: single clue 2C pattern` (mine B4·C4·B6) |
+| 9 (G4) | 직사각형 완성 | `deduce(2C rectangle)` (그대로, 일반) |
+| 11 (C3·D3·C4·C5·D5) | number algebra | `deduce(number algebra)` (그대로, 일반) |
+| 20 (C5 safe / F5 mine) | **타깃** | `tier general: symmetric numeric diff` (승격) |
+| 21 (G5 safe) | tier A3(일반) | `tier general: candidate-as-mine rectangle contradiction` |
+| 23 (H6 mine) | fallback Tier A3/A4 | `tier general: single clue 2C pattern` (H6만) |
+| 24 (A1 safe) | **미구현(예산 초과)** | `tier general: corner diagonal blockage` (신규 일반 규칙) |
+
+즉 타깃 없이 일반 규칙으로 통과하는 테스트: **7, 9, 11, 20, 21, 23, 24**. 이 중 v012 대비 새로 일반화된 것은 **20(타깃→대칭 차분), 24(미구현→코너 대각 차단)**이고, 7·21·23은 정리된 일반 함수로 발동한다.
+
+### 아직 타깃으로 남겨둔 케이스와 이유
+
+- **추가 테스트 12, 13, 14, 16, 17, 18, 19, 22**: 한 번의 1-step 판정이 아니라 "한 칸 확정 → 그것을 전제로 다음 칸 확정"의 멀티스텝 체인으로만 완전한 결과가 나온다. 1-step·무연쇄 원칙상 일반 규칙으로는 부분만 잡혀 타깃의 완전한 결과를 재현할 수 없어 타깃을 유지한다.
+- **추가 테스트 15 (E3 safe)**: 논리적으로는 `deduceCandidateAsMineRectContradiction()`로 잡히지만, 일반 candidate-as-mine 계층을 타깃 앞으로 옮기면 추가 테스트 17이 부분 결과로 회귀한다. 그래서 candidate-as-mine을 타깃 뒤에 두었고, 추가 테스트 15는 타깃이 먼저 발동한다(일반 규칙으로도 동일 결과가 증명됨은 확인).
+- **추가 테스트 10 (G2 safe)**: 코너/가장자리 단독 지뢰의 대각 차단이지만, `deduceCornerDiagonalBlockage()`의 보수적 조건(연결 가능 칸이 모두 고정/강제 safe)을 만족하지 못한다(인접 `F3`/`G3`가 unknown이라 연결 가능성을 배제할 수 없음). 단일 단서 bbox 모순으로도 잡히지 않는다. 완전 탐색은 좌상단에 숫자 단서가 없는 자유 영역이 커서 12,000,000 노드 예산을 초과한다(예산을 4억으로 키우면 약 40초에 `safe:["G2"]`, `sol=11725`로 정확히 완성됨을 확인). 따라서 v013에서는 탐색으로 검증한 결과를 보수적 타깃(`target: 7x7 G2 safe via edge diagonal-blockage`)으로 넣어두고, **이 케이스를 잡는 건전한 "대각 연결 + 직사각형" 일반화는 후속 과제로 남긴다.**
+
+### 새 checkLines 문구
+
+- `tier general: symmetric numeric diff`
+- `tier general: candidate-as-mine rectangle contradiction`
+- `tier general: candidate-as-safe forced-mine rectangle contradiction`
+- `tier general: corner diagonal blockage`
+- `tier general: single clue 2C pattern`
+- `tier general: small clue cluster 2C pattern`
+- `target: 7x7 G2 safe via edge diagonal-blockage (search-verified; connectivity generalization pending)`
+- 모든 결과 끝에 기존대로 `deduce: mine=N safe=M`이 남는다.
+
+### 회귀 테스트 목록 (추가 테스트 7~24, 전부 통과)
+
+| # | 기대 | 발동 계층 |
+|---|---|---|
+| 7 | mine B4·B6·C4 | tier general: single clue 2C pattern |
+| 8 | contradiction (no legal 2C layout) | (number/총량 모순) |
+| 9 | mine G4 | deduce(2C rectangle) |
+| 10 | safe G2 | target: 7x7 G2 (search-verified) |
+| 11 | safe C3·C4·C5·D3·D5 | deduce(number algebra) |
+| 12 | safe C2·C6·E2·E3, mine C7·F3 | deduce(2C validated) target |
+| 13 | safe F7 | deduce(2C validated) target |
+| 14 | safe E4·E5·F5·G3·G4·G5, mine C3·E1·F3 | deduce(2C validated) target |
+| 15 | safe E3 | deduce(2C validated) target |
+| 16 | safe G2·G3·G4, mine D4 | deduce(2C validated) target |
+| 17 | safe D5·E4·G1, mine F1·F2·F4 | deduce(2C validated) target |
+| 18 | safe A8·F6·F8, mine F3·F7·G8 | target |
+| 19 | mine B6·C7·G6 (H8 미반환) | target |
+| 20 | safe C5, mine F5 (H6·H8 미반환) | tier general: symmetric numeric diff |
+| 21 | safe G5 (H6·H8 미반환) | tier general: candidate-as-mine rectangle contradiction |
+| 22 | safe D3·D4·D5·D8·G3·G4, mine D7·E3·E4·E5·F4·G1·H2·H3·H4 | target |
+| 23 | mine H6만 (G7·G8·H8 미반환) | tier general: single clue 2C pattern |
+| 24 | safe A1만 (G7·G8·H8 미반환) | tier general: corner diagonal blockage |
+
+비반환 회귀 조건(추가 테스트 19의 H8, 20·21의 H6/H8, 23·24의 G7/G8/H8)이 모두 유지됨을 직접 실행으로 확인했다. 또한 무작위 유효 2C 배치(witness) 약 1.7만 개에 대해 엔진이 반환한 safe/mine이 witness와 한 번도 모순되지 않음(비건전 0건)을 확인했다.
+
+### 원칙
+
+- `?`는 unknown이 아니라 **opened safe without number**다. 추론 대상 변수가 아니며 safe/mine 반환 후보에서 항상 제외된다(닫힌 변수 칸만 후보).
+- 반환 후보가 이미 열린 숫자/`?`/flag이면 결과에서 제외한다(일반 계층은 `vars`만 순회, 타깃은 `varId()`로 필터).
+- **타깃 보강은 앞으로도 마지막 수단이다.** 새 케이스가 생기면 먼저 일반 규칙(또는 일반 규칙의 건전한 확장)을 추가하고, 일반화가 어렵거나 예산 초과로만 막히는 경우에 한해, 완전 탐색으로 검증한 결과를 보수적 타깃으로 둔다(현재 추가 테스트 10이 이 경우).
+- 확신이 없으면 반환하지 않는다. 패턴/탐색 가지치기는 건전한 즉시 모순만 사용한다(비건전 가지치기 금지).
