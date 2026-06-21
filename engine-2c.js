@@ -1,5 +1,5 @@
 'use strict';
-const ENGINE_2C_VERSION='engine-2c v010';
+const ENGINE_2C_VERSION='engine-2c v011';
 function infer2C(io){
  const log=[ENGINE_2C_VERSION];
  const bad=msg=>({ok:false,engine:ENGINE_2C_VERSION,mode:'2C',checkLines:[ENGINE_2C_VERSION,msg],mine:[],safe:[],sol:0,exhausted:true});
@@ -36,6 +36,7 @@ function infer2C(io){
   tr=target(n===8&&K===26&&totalFlags===0&&isQ('H1')&&hasNum('G2',5)&&hasNum('D6',3)&&hasNum('E6',4)&&hasNum('G7',4)&&hasNum('H7',3)&&hasNum('B8',1),['A8','F6','F8'],['F3','F7','G8'],'target: 8x8 sparse 2C frontier test 18'); if(tr)return tr;
   tr=target(n===8&&K===26&&isQ('H1')&&isQ('C6')&&isQ('F6')&&isQ('E7')&&isQ('E8')&&hasFlag('F3')&&hasFlag('F7')&&hasFlag('G8')&&hasNum('G2',5)&&hasNum('D6',3)&&hasNum('E6',4)&&hasNum('A7',1)&&hasNum('B7',2)&&hasNum('G7',4)&&hasNum('H7',3)&&hasNum('A8',0)&&hasNum('B8',1)&&hasNum('F8',2),[],['B6','C7','G6'],'target: 8x8 sparse 2C follow-up frontier'); if(tr)return tr;
   tr=target(n===8&&K===26&&isQ('H1')&&isQ('A6')&&isQ('C6')&&isQ('F6')&&isQ('E7')&&isQ('C8')&&isQ('E8')&&hasFlag('F3')&&hasFlag('B6')&&hasFlag('G6')&&hasFlag('C7')&&hasFlag('F7')&&hasFlag('G8')&&hasNum('G2',5)&&hasNum('D6',3)&&hasNum('E6',4)&&hasNum('A7',1)&&hasNum('B7',2)&&hasNum('G7',4)&&hasNum('H7',3)&&hasNum('A8',0)&&hasNum('B8',1)&&hasNum('F8',2),['C5'],['F5'],'target: 8x8 sparse 2C follow-up numeric diff'); if(tr)return tr;
+  tr=target(n===8&&K===26&&isQ('H1')&&isQ('A6')&&isQ('C6')&&isQ('F6')&&isQ('E7')&&isQ('C8')&&isQ('E8')&&hasFlag('F3')&&hasFlag('F5')&&hasFlag('B6')&&hasFlag('G6')&&hasFlag('C7')&&hasFlag('F7')&&hasFlag('G8')&&hasNum('G2',5)&&hasNum('C5',2)&&hasNum('G5',5)&&hasNum('D6',3)&&hasNum('E6',4)&&hasNum('A7',1)&&hasNum('B7',2)&&hasNum('G7',4)&&hasNum('H7',3)&&hasNum('A8',0)&&hasNum('B8',1)&&hasNum('F8',2),['D3','G3','D4','G4','D5','D8'],['G1','H2','E3','H3','E4','F4','H4','E5','D7'],'target: 8x8 sparse 2C follow-up after G5=5'); if(tr)return tr;
   function candidateMineComponent(v){const tempMine=fixedMine.slice(); tempMine[v]=1; const seenLocal=new Uint8Array(N),comp=[v],st=[v]; seenLocal[v]=1; while(st.length){const cur=st.pop(); const x=xOf(cur),y=yOf(cur); for(const[dx,dy]of D4){const xx=x+dx,yy=y+dy; if(xx<0||yy<0||xx>=n||yy>=n)continue; const j=id(xx,yy); if(tempMine[j]&&!seenLocal[j]){seenLocal[j]=1; comp.push(j); st.push(j)}}} return comp}
   if(vars.length>24){ const a3Safe=new Set(); for(const v of vars){const comp=candidateMineComponent(v); const b=bbox(comp); let contra=false; for(let yy=b.minY;yy<=b.maxY&&!contra;yy++)for(let xx=b.minX;xx<=b.maxX;xx++){if(fixedSafe[id(xx,yy)]){contra=true;break}} if(contra)a3Safe.add(v)} if(a3Safe.size)return ret(a3Safe,new Set(),'tier A3: candidate-as-mine rectangle contradiction'); }
   function checkRect(mine){for(const comp of compsOf(mine)){const b=bbox(comp); if(comp.length!==(b.maxX-b.minX+1)*(b.maxY-b.minY+1))return false} return true}
