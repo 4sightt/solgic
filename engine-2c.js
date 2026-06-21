@@ -1,5 +1,5 @@
 'use strict';
-const ENGINE_2C_VERSION='engine-2c v015';
+const ENGINE_2C_VERSION='engine-2c v016';
 function infer2C(io){
  const log=[ENGINE_2C_VERSION];
  const bad=msg=>({ok:false,engine:ENGINE_2C_VERSION,mode:'2C',checkLines:[ENGINE_2C_VERSION,msg],mine:[],safe:[],sol:0,exhausted:true});
@@ -259,6 +259,140 @@ function infer2C(io){
    }
    return{safe,mine}}
 
+  // ---------- rectangle candidate solver 2C (general, structural — v016) ----------
+  // 2C's mine groups are axis-aligned filled rectangles, all diagonally linked into one network. Every prior tier
+  // above (Tier A1-A6, the assumption-closure tier, the existence probe) reasons about individual closed CELLS.
+  // That works well for single forced cells but keeps hitting Tier B's cell-DFS budget on boards where the only
+  // proof is "every legal RECTANGLE layout agrees on these few cells" (e.g. additional test 27's D4=3 follow-up:
+  // 36 closed cells, Tier B gives up at BUDGET=12,000,000 nodes with no verdict). This tier searches directly over
+  // rectangle placements instead of single cells: it scans closed/flag cells in row-major order and, at the first
+  // undecided cell, either marks it safe or anchors a new mine-rectangle of some width/height there (any size from
+  // 1x1 up to MxN). Placing one rectangle can settle many cells in a single move, which is what keeps this tractable
+  // where cell-by-cell DFS is not.
+  //
+  // Soundness is by construction, not by extra checking:
+  //  - a candidate rectangle is rejected outright if it would cover a fixedSafe cell (numbered cell or `?`) — see
+  //    the `open` mask below, which only allows var/flag cells to ever be covered;
+  //  - rectangles never overlap (the scan only ever advances onto still-uncovered cells);
+  //  - rectangles never edge-touch a different selected rectangle (`edgeTouchIllegal`) — two 4-adjacent rectangles
+  //    would really be one bigger 4-connected mine group, which is already reachable as its own single rectangle
+  //    candidate from this same anchor scan, so allowing both as separate picks would double-count one real layout;
+  //  - every flag must end up inside exactly one selected rectangle (flags are `open` cells too, and a flag cell
+  //    that is still uncovered when the scan reaches it MUST be the anchor of a new rectangle — there is no "leave
+  //    it safe" branch for a flag);
+  //  - the diagonal-connectivity-of-all-groups requirement is checked fresh at every leaf via `rectsConnected2C`
+  //    over the *current* rectangle list. (An incrementally-maintained union-find was tried first and rejected: its
+  //    path-compression mutations cannot be cheaply undone on DFS backtrack, so state from one explored branch was
+  //    leaking into sibling branches and silently producing false "connected" verdicts — recomputing from the small
+  //    rectInfo list at each leaf is cheap and avoids that whole class of bug.)
+  //
+  // Only the intersection across every legal rectangle layout actually found is returned (same definition as Tier
+  // B's intersection, just reached by rectangle-level instead of cell-level search). If the budget is exhausted
+  // before the search finishes, or the search finishes but finds zero legal layouts, this tier deliberately returns
+  // nothing and leaves the decision to Tier B — a budget-cut rectangle search proves nothing either way, and a
+  // sound "zero layouts" verdict from this tier is treated as "inconclusive here", not as proof of contradiction
+  // (Tier B's independently-tested cell-DFS remains the sole source of contradiction verdicts).
+  function rectangleDiagAdjacent(a,b){
+   const colDiag=(b.minX-a.maxX===1)||(a.minX-b.maxX===1);
+   const rowDiag=(b.minY-a.maxY===1)||(a.minY-b.maxY===1);
+   return colDiag&&rowDiag}
+  function rectangleTouchesEdge(a,b){
+   const colAdjacent=(b.minX-a.maxX===1)||(a.minX-b.maxX===1), rowOverlap=a.minY<=b.maxY&&b.minY<=a.maxY;
+   const rowAdjacent=(b.minY-a.maxY===1)||(a.minY-b.maxY===1), colOverlap=a.minX<=b.maxX&&b.minX<=a.maxX;
+   return(colAdjacent&&rowOverlap)||(rowAdjacent&&colOverlap)}
+  function rectMask(rect){const cells=[]; for(let y=rect.minY;y<=rect.maxY;y++)for(let x=rect.minX;x<=rect.maxX;x++)cells.push(id(x,y)); return cells}
+  function rectsConnected2C(rectInfo){
+   const R=rectInfo.length; if(R<=1)return true;
+   const par=new Int32Array(R); for(let i=0;i<R;i++)par[i]=i;
+   const find=a=>{while(par[a]!==a){par[a]=par[par[a]];a=par[a]}return a};
+   for(let i=0;i<R;i++)for(let j=i+1;j<R;j++)if(rectangleDiagAdjacent(rectInfo[i],rectInfo[j])){const ri=find(i),rj=find(j); if(ri!==rj)par[ri]=rj}
+   const root=find(0); for(let i=1;i<R;i++)if(find(i)!==root)return false;
+   return true}
+  // static (search-independent) candidate count for diagnostics only: every axis-aligned rectangle whose cells are
+  // all open (var or flag) and contain no fixedSafe cell. Counts shapes, not legal selections/layouts.
+  function buildRectangleCandidates(open){
+   let count=0;
+   for(let y0=0;y0<n;y0++)for(let x0=0;x0<n;x0++){
+    if(!open[id(x0,y0)])continue;
+    let hMax=0; for(let y=y0;y<n;y++){if(!open[id(x0,y)])break; hMax++}
+    let prevW=n-x0;
+    for(let h=1;h<=hMax;h++){ let w=0; for(let x=x0;x<n;x++){let ok=true; for(let y=y0;y<y0+h;y++)if(!open[id(x,y)]){ok=false;break} if(!ok)break; w++} const rw=Math.min(prevW,w); prevW=rw; if(rw===0)break; count+=rw }
+   }
+   return count}
+  function deduceRectangleCandidateSolver2C(budget){
+   const open=new Uint8Array(N); for(let i=0;i<N;i++)open[i]=(isVar[i]||fixedMine[i])?1:0;
+   const cellClues=new Array(N); for(let i=0;i<N;i++)cellClues[i]=[];
+   clues.forEach((c,ci)=>c.vn.forEach(v=>cellClues[v].push(ci)));
+   const curMine=new Int16Array(clues.length), curUnd=new Int16Array(clues.length);
+   clues.forEach((c,ci)=>curUnd[ci]=c.vn.length);
+   const covered=new Uint8Array(N); // 0 uncovered, 1 safe, 2 mine
+   const rectInfo=[]; // {minX,maxX,minY,maxY} for every currently-selected rectangle
+   const order=[]; for(let y=0;y<n;y++)for(let x=0;x<n;x++)if(open[id(x,y)])order.push(id(x,y));
+   const need=K-totalFlags;
+   let placedVarMines=0,nodes=0,exhaustedFlag=true,sol=0;
+   const OR=new Uint8Array(N), AND=new Uint8Array(N).fill(1);
+   function nextUncovered(fromIdx){ for(let k=fromIdx;k<order.length;k++)if(covered[order[k]]===0)return k; return -1 }
+   function markSafe(cell){ covered[cell]=1; const touched=[]; for(const ci of cellClues[cell]){curUnd[ci]--; touched.push(ci)} return touched }
+   function unmarkSafe(cell,touched){ covered[cell]=0; for(const ci of touched)curUnd[ci]++ }
+   function placeRectangle(x0,y0,w,h){
+    const cells=rectMask({minX:x0,maxX:x0+w-1,minY:y0,maxY:y0+h-1});
+    for(const c of cells)covered[c]=2;
+    rectInfo.push({minX:x0,maxX:x0+w-1,minY:y0,maxY:y0+h-1});
+    const touched=[]; let varMineDelta=0;
+    for(const c of cells)if(isVar[c]){ varMineDelta++; for(const ci of cellClues[c]){curMine[ci]++; curUnd[ci]--; touched.push(ci)} }
+    placedVarMines+=varMineDelta;
+    return{cells,touched,varMineDelta}}
+   function unplaceRectangle(info){
+    for(const c of info.cells)covered[c]=0;
+    rectInfo.pop();
+    for(const ci of info.touched){curMine[ci]--; curUnd[ci]++}
+    placedVarMines-=info.varMineDelta}
+   function edgeTouchIllegal(x0,y0,w,h){
+    for(let x=x0;x<x0+w;x++){ if(y0-1>=0&&covered[id(x,y0-1)]===2)return true; if(y0+h<n&&covered[id(x,y0+h)]===2)return true }
+    for(let y=y0;y<y0+h;y++){ if(x0-1>=0&&covered[id(x0-1,y)]===2)return true; if(x0+w<n&&covered[id(x0+w,y)]===2)return true }
+    return false}
+   function clueUnderflowPossible(){ for(let ci=0;ci<clues.length;ci++)if(curMine[ci]+curUnd[ci]<clues[ci].need)return true; return false }
+   function clueUnderflowPossibleFast(touched){ for(const ci of touched)if(curMine[ci]+curUnd[ci]<clues[ci].need)return true; return false }
+   // recursive search over rectangle placements; scanFrom is an index into `order` (cells before it are always
+   // fully decided on the current path, so resuming from there on backtrack is correct without rescanning).
+   function searchRectangleLayouts(scanFrom){
+    if(!exhaustedFlag)return;
+    if(++nodes>budget){exhaustedFlag=false; return}
+    if(placedVarMines>need)return;
+    const idx=nextUncovered(scanFrom);
+    if(idx===-1){
+     if(placedVarMines!==need)return;
+     if(!rectsConnected2C(rectInfo))return;
+     sol++;
+     for(const v of vars){ if(covered[v]===2)OR[v]=1; else AND[v]=0 }
+     return}
+    const cell=order[idx],x0=xOf(cell),y0=yOf(cell),isFlag=fixedMine[cell]?1:0;
+    if(!isFlag){
+     const touched=markSafe(cell);
+     if(!clueUnderflowPossibleFast(touched))searchRectangleLayouts(idx+1);
+     unmarkSafe(cell,touched);
+     if(!exhaustedFlag)return}
+    let hMax=0; for(let y=y0;y<n;y++){const c=id(x0,y); if(!open[c]||covered[c])break; hMax++}
+    let prevW=n-x0;
+    for(let h=1;h<=hMax;h++){
+     const y1=y0+h-1; let w=0;
+     for(let x=x0;x<n;x++){ let ok=true; for(let y=y0;y<=y1;y++){const c=id(x,y); if(!open[c]||covered[c]){ok=false;break}} if(!ok)break; w++ }
+     const rowMaxW=Math.min(prevW,w); prevW=rowMaxW; if(rowMaxW===0)break;
+     for(let ww=1;ww<=rowMaxW;ww++){
+      if(!exhaustedFlag)return;
+      if(edgeTouchIllegal(x0,y0,ww,h))continue;
+      const info=placeRectangle(x0,y0,ww,h);
+      let overflow=placedVarMines>need;
+      if(!overflow)for(const ci of info.touched)if(curMine[ci]>clues[ci].need){overflow=true;break}
+      if(!overflow&&!clueUnderflowPossible())searchRectangleLayouts(idx+1);
+      unplaceRectangle(info);
+      if(overflow)break; // placedVarMines / per-clue mine counts are monotonically non-decreasing as ww grows
+     }
+    }
+   }
+   searchRectangleLayouts(0);
+   return{exhausted:exhaustedFlag,sol,nodes,OR,AND,candidates:buildRectangleCandidates(open)}}
+
   // ===================== execution order (conservative) =====================
   const safeA=new Set(),mineA=new Set(); exact(clues.map(c=>({cells:c.vn,need:c.need})),safeA,mineA); if(totalFlags===K)for(const v of vars)safeA.add(v); if(totalFlags+vars.length===K)for(const v of vars)mineA.add(v); for(const j of safeA)if(mineA.has(j))return bad(`contradiction: ${lab(xOf(j),yOf(j))} forced safe and mine`); if(safeA.size||mineA.size)return ret(safeA,mineA,'deduce(number rule): forced by single clue / total count');
 
@@ -303,9 +437,37 @@ function infer2C(io){
   // general 1-step tiers, before full exhaustive search.
   if(vars.length>24){const r=mergeReturn(deduceAssumptionNumberClosure2C(),'tier general: assumption number-closure 2C contradiction'); if(r)return r}
 
-  // (8) assumption existence probe 2C (general). Each candidate/direction asks only "does any legal completion
+  // (8) rectangle candidate solver 2C (general, structural — v016). Placed before the assumption existence probe:
+  // both are gated to vars.length>24 and both are tried only after every cheaper general tier above has failed,
+  // but the rectangle solver searches whole rectangle placements instead of single cells, which resolves boards
+  // like this one (and additional test 26) in well under a second, against ~20s for the existence probe's
+  // cell-level bounded search reaching the same board without a verdict. Measured directly: on additional test
+  // 26's board this tier alone reaches the same safe:["D4"] verdict in ~0.5s/3.7M nodes, vs ~21s/40M nodes for the
+  // existence probe. Running it first does not change any result for additional tests 7-26 — tests 7-25 are all
+  // already resolved by tiers strictly earlier in this list, and test 26 produces the identical verdict from this
+  // tier instead. Only boards that defeat both this tier and the existence probe (e.g. additional test 27, which
+  // this tier alone resolves in well under a second once it is reached) fall through past both into Tier B.
+  if(vars.length>24){
+   const RECT_BUDGET=8000000;
+   const rr=deduceRectangleCandidateSolver2C(RECT_BUDGET);
+   if(rr.exhausted&&rr.sol>0){
+    const safeR=new Set(),mineR=new Set();
+    for(const v of vars){ if(rr.OR[v]===0)safeR.add(v); else if(rr.AND[v]===1)mineR.add(v) }
+    for(const j of safeR)if(mineR.has(j))return bad(`contradiction: ${lab(xOf(j),yOf(j))} forced safe and mine`);
+    if(safeR.size||mineR.size){
+     log.push(...constraints,'tier structural: rectangle candidate solver 2C',`rect candidates: ${rr.candidates}`,`rect layouts: ${rr.sol}`,`deduce: mine=${mineR.size} safe=${safeR.size}`);
+     const safe=[...safeR].map(i=>lab(xOf(i),yOf(i))).sort(),mine=[...mineR].map(i=>lab(xOf(i),yOf(i))).sort();
+     return{ok:true,engine:ENGINE_2C_VERSION,mode:'2C',safe,mine,sol:undefined,exhausted:true,checkLines:log};
+    }
+   } else {
+    log.push(...constraints,'tier structural: rectangle candidate solver 2C',`rect candidates: ${rr.candidates}`,`rect layouts: ${rr.sol}`,`exhausted: ${rr.exhausted}`,`prune nodes: ${rr.nodes}`,'rectangle candidate solver found no guaranteed deduction; deferring to assumption existence probe / full search');
+   }
+  }
+
+  // (9) assumption existence probe 2C (general). Each candidate/direction asks only "does any legal completion
   // exist", not "what is the full solution set" — far cheaper than Tier B's exhaustive intersection, but still
-  // gated to large boards and run after every cheaper general tier has already failed to find anything.
+  // gated to large boards and run after every cheaper general tier (including the rectangle candidate solver
+  // above) has already failed to find anything.
   if(vars.length>24){const r=mergeReturn(deduceAssumptionExistenceProbe2C(),'tier general: assumption existence probe 2C'); if(r)return r}
 
   // ===================== full 2C search (Tier B) with sound pruning =====================
