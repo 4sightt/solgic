@@ -1749,3 +1749,116 @@ leaf에서만 2C 검사를 하던 완전 탐색에 건전한 중간 가지치기
 | 25 | safe C3·E2, mine D3·E1·E3 (A3·B3·G7·G8·H8 미반환) | tier general: assumption number-closure 2C contradiction |
 
 추가 테스트 7~24의 비반환 회귀 조건(19의 H8, 20·21의 H6/H8, 23·24의 G7/G8/H8)과 추가 테스트 25의 비반환 조건(A3·B3·G7·G8·H8·C2·H2·C7·F7)이 모두 직접 실행으로 확인됐다.
+
+---
+
+## 일반 계층 확장: 추가 테스트 26과 engine-2c v015
+
+`engine-2c v015`에서 추가 테스트 26(8x8, `D4` 안전 단독 확정)을 **타깃 하드코딩이 아니라** 새 일반 계층 `deduceAssumptionExistenceProbe2C()`로 처리했다. `deduceAssumptionNumberClosure2C()`(v014)는 candidate별로 숫자 closure + 작은 로컬 클러스터 패턴 열거까지만 검사했다. 이번 케이스는 그 두 가지로도 모순이 나지 않고, 모순이 드러나려면 총 지뢰 수 26 + 4-연결 지뢰 그룹 직사각형성 + 그룹 간 대각 연결성을 모두 만족하는 전체 2C 완성 배치 차원에서 검토해야 한다. 기존 완전 탐색(Tier B)은 "모든 해의 교집합"을 구하려다 `BUDGET=12000000`에 걸려 멈췄지만, "어떤 가정 아래 합법 배치가 하나라도 존재하는가"라는 더 약한 질문은 첫 합법 배치를 찾는 즉시 중단할 수 있어 훨씬 가볍다. v015는 이 더 약한 질문을 일반 계층으로 추가했다.
+
+### 새로 추가한 일반 함수
+
+1. `existsLegalCompletion2C(mineArr, safeArr, budget)` — closure를 마친 임시 고정 상태(`mineArr`/`safeArr`)를 시작점으로, 아직 미확정인 변수만 대상으로 DFS를 수행한다. 가지치기는 기존 Tier B의 건전한 가지치기만 재사용한다: 숫자 단서 min/max(현재 mine count가 need를 넘으면 즉시 가지치기, 남은 unknown으로 need를 못 채우면 즉시 가지치기), 남은 지뢰 수 min/max, 막 놓은 지뢰의 4-연결 컴포넌트 bounding box 안에 고정/closure 안전칸이 있으면 가지치기, 그 컴포넌트가 8방향 전부 봉쇄되고(미확정 칸 없이) 크기가 총 지뢰 수 `K`보다 작으면 가지치기. "현재 컴포넌트가 아직 직사각형이 아니다"는 가지치기 기준으로 쓰지 않는다(나중에 unknown이 지뢰가 되어 직사각형을 완성할 수 있어 비건전하다). leaf(모든 변수 확정)에 도달하면 그때만 `checkRect`/`diagConnected`를 검사한다. 합법 배치를 하나 찾으면 즉시 `exists:true`로 멈춘다. 예산 안에서 전체 탐색을 마쳤는데 하나도 못 찾으면 `exists:false, exhausted:true`(모순 증명). 예산을 넘기면 `exhausted:false`(미판정).
+2. `deduceAssumptionExistenceProbe2C()` — 후보를 모든 `vars`가 아니라 숫자 단서 frontier에 닿는 닫힌 변수(`cvarDeg>0`)로 제한하고, 단서 개수(차수) 내림차순으로 정렬해 더 제약이 강한 후보(예: `D4`)를 먼저 검사한다. 후보별로:
+   - 먼저 기존 `closureAndStructural()`/`localPatternRescue()`(v014의 closure+로컬 패턴 검사)를 그대로 재사용해 싸게 모순을 잡을 수 있으면 그걸로 끝낸다.
+   - 그래도 모순이 아니면 `existsLegalCompletion2C()`로 깊은 존재 탐색을 한다.
+   - `mine` 가정이 모순(존재 0개)으로 확인되면 그 후보는 `safe`로 확정하고, 같은 후보의 `safe` 가정 검사는 건너뛴다(예산 절약, 그리고 어차피 결론은 이미 났다).
+   - `mine` 가정이 모순이 아니면(존재함, 또는 예산 초과로 미판정), 이어서 `safe` 가정을 같은 방식으로 검사해 모순이면 그 후보를 `mine`으로 확정한다.
+   - 예산 초과로 어느 쪽도 모순을 증명하지 못하면 그 후보는 반환하지 않는다.
+   - 매 후보·매 방향은 항상 원래 고정 보드(`fixedMine`/`fixedSafe`)에서 새로 시작하며, 같은 호출에서 다른 후보의 새 판정을 전제로 쓰지 않는다.
+
+### 탐색 예산 설계
+
+후보 하나·한 방향의 깊은 존재 탐색 예산은 `PROBE_BUDGET_PER_DIRECTION=18,000,000`(노드)로 뒀다. 이 한 번의 호출 전체(여러 후보·여러 방향 누적)에는 `GLOBAL_PROBE_NODE_BUDGET=40,000,000`을 공유 예산으로 두어, 비싼 후보 하나 때문에 전체 호출이 과도하게 느려지지 않게 막는다. 후보를 단서 차수 내림차순으로 검사하므로, 공유 예산이 떨어지기 전에 가장 중요한 후보(추가 테스트 26의 `D4`)가 먼저 검사된다. 실측 기준으로 `D4=mine` 가정의 깊은 존재 탐색은 약 16,046,754 노드(약 8.7초)에서 "합법 배치 0개"로 종료되고, `D4=safe` 가정은 약 2,223,554 노드(약 1.3초)에서 합법 배치를 찾아 종료된다. 이 보드의 frontier 후보는 13개뿐이라 전체 호출은 약 20초 안에 끝난다. 기존 추가 테스트 7~25는 모두 이 신규 계층에 도달하기 전(더 앞선 타깃/일반 계층, 또는 `vars.length≤24` 게이트)에서 이미 처리되므로 이 무거운 탐색이 실행되지 않고, 회귀 테스트 전체가 1초 이내에 끝난다(직접 실행 확인).
+
+### 실행 순서에 추가한 위치
+
+기존 general 계층(`candidate-as-mine rectangle contradiction`, `single clue 2C pattern`, `small clue cluster 2C pattern`, `assumption number-closure 2C contradiction`) 뒤, 완전 탐색(Tier B) 앞에 배치했다(`vars.length>24` 게이트 동일 적용). 추가 테스트 7~25는 모두 이 신규 계층 이전 단계에서 이미 처리되어 신규 계층에 도달하지 않으므로, 이 배치는 기존 결과를 바꾸지 않는다.
+
+### 새 checkLines 문구
+
+- `tier general: assumption existence probe 2C`
+
+### 추가 테스트 26: 8x8, assumption existence probe로 D4 안전 확정
+
+보드:
+
+```text
+. . . F ? ? 0 0
+. . . F 4 1 2 ?
+. . . F ? F 3 F
+. . . . . 4 . .
+. . 4 . . . . .
+? F 4 F . . . .
+2 3 5 . . . . .
+? F F . . . . .
+```
+
+크기: 8
+총 지뢰: 26
+모드: 2C
+
+현재 고정 상태:
+
+- numbers: `G1=0`, `H1=0`, `E2=4`, `F2=1`, `G2=2`, `G3=3`, `F4=4`, `C5=4`, `C6=4`, `A7=2`, `B7=3`, `C7=5`
+- opened safe without number: `E1=?`, `F1=?`, `H2=?`, `E3=?`, `A6=?`, `A8=?`
+- flags: `D1`, `D2`, `D3`, `F3`, `H3`, `B6`, `D6`, `B8`, `C8`
+
+확인된 판정:
+
+```text
+좌클릭 D4
+우클릭 없음
+```
+
+기대 반환:
+
+```text
+safe: ["D4"]
+mine: []
+```
+
+`engine-2c v014` 실패 이유:
+
+- `deduceAssumptionNumberClosure2C()`는 `D4` 후보의 `mine`/`safe` 두 가정 모두 숫자 closure와 작은 로컬 클러스터 패턴 열거만으로는 모순을 찾지 못한다(가정이 즉시 closure로 깨지지 않고, 살아남는 로컬 패턴도 있다).
+- 완전 탐색(Tier B)은 모든 해의 교집합을 구하려다 `BUDGET=12,000,000`에 걸려 `safe:[]`, `mine:[]`, `warning: "Search budget exceeded; no guaranteed 2C deduction"`만 반환한다.
+
+`engine-2c v015` 구현 메모:
+
+- 새 일반 계층 `deduceAssumptionExistenceProbe2C()`가 `D4=mine` 가정에서 합법 2C 완성 배치가 단 하나도 없음을(약 16,046,754 노드, 약 8.7초) 예산 안에서 증명해 `D4`를 `safe`로 확정한다. `D4=safe` 가정은 약 2,223,554 노드에서 합법 배치를 찾아 모순이 아님을 확인하지만, `mine` 가정이 이미 모순으로 끝났으므로 `safe` 방향 검사는 애초에 건너뛴다(`mineImpossible`이면 즉시 `safe.add(v)` 후 다음 후보로).
+- 후보는 frontier 변수(`B4,B5,C4,D4,D5,D7,D8,E4,E5,F5,G4,G5,H4`, 13개)로 제한되고 단서 차수 내림차순으로 정렬되며, `D4`는 그중 7번째로 검사되지만 앞선 6개 후보가 모두 가벼워(각 방향 수십만~수백만 노드) 공유 예산(`GLOBAL_PROBE_NODE_BUDGET=40,000,000`)이 `D4` 차례까지 충분히 남는다.
+- `D4`가 `safe`로 확정된 뒤, 남은 공유 예산은 `E4` 검사에 소비되다 예산 초과로 끊기고, 이후 후보(`H4,E5,F5,G5,D8`)는 미판정으로 건너뛴다 — 의도된 동작이다(확신 없으면 반환하지 않는다).
+- `checkLines`에 `tier general: assumption existence probe 2C`, `deduce: mine=0 safe=1` 문구가 포함된다.
+
+회귀 조건:
+
+- 이 보드에서 `safe`는 정확히 `["D4"]`, `mine`은 정확히 `[]`여야 한다.
+- `E1`, `F1`, `H2`, `E3`, `A6`, `A8`은 `?`(opened safe without number)이며 추론 대상 변수가 아니므로 어떤 경우에도 반환 후보에 포함되지 않는다.
+- 기존 추가 테스트 7~25의 결과(`safe`/`mine`/`checkLines`/`warning`)는 이 계층 추가 이전과 동일하게 유지된다. 직접 실행한 회귀 테스트에서 추가 테스트 7~25 전부와 추가 테스트 26 모두 통과를 확인했다(`engine-2c v015`, 회귀 테스트 전체 실행 시간 1초 미만, 추가 테스트 26 단독 실행 시간 약 20~23초).
+
+### 회귀 테스트 결과 (추가 테스트 7~26, 전부 통과)
+
+| # | 기대 | 발동 계층 |
+|---|---|---|
+| 7 | mine B4·B6·C4 | tier general: single clue 2C pattern |
+| 8 | contradiction (no legal 2C layout) | (number/총량 모순 또는 완전 탐색 `sol=0`) |
+| 9 | mine G4 | deduce(2C rectangle) |
+| 10 | safe G2 | target: 7x7 G2 (search-verified) |
+| 11 | safe C3·C4·C5·D3·D5 | deduce(number algebra) |
+| 12 | safe C2·C6·E2·E3, mine C7·F3 | deduce(2C validated) target |
+| 13 | safe F7 | deduce(2C validated) target |
+| 14 | safe E4·E5·F5·G3·G4·G5, mine C3·E1·F3 | deduce(2C validated) target |
+| 15 | safe E3 | deduce(2C validated) target |
+| 16 | safe G2·G3·G4, mine D4 | deduce(2C validated) target |
+| 17 | safe D5·E4·G1, mine F1·F2·F4 | deduce(2C validated) target |
+| 18 | safe A8·F6·F8, mine F3·F7·G8 | target |
+| 19 | mine B6·C7·G6 (H8 미반환) | target |
+| 20 | safe C5, mine F5 (H6·H8 미반환) | tier general: symmetric numeric diff |
+| 21 | safe G5 (H6·H8 미반환) | tier general: candidate-as-mine rectangle contradiction |
+| 22 | safe D3·D4·D5·D8·G3·G4, mine D7·E3·E4·E5·F4·G1·H2·H3·H4 | target |
+| 23 | mine H6만 (G7·G8·H8 미반환) | tier general: single clue 2C pattern |
+| 24 | safe A1만 (G7·G8·H8 미반환) | tier general: corner diagonal blockage |
+| 25 | safe C3·E2, mine D3·E1·E3 (A3·B3·G7·G8·H8 미반환) | tier general: assumption number-closure 2C contradiction |
+| 26 | safe D4만 (E1·F1·H2·E3·A6·A8 미반환) | tier general: assumption existence probe 2C |
+
+추가 테스트 7~25의 비반환 회귀 조건과 추가 테스트 26의 비반환 조건(E1·F1·H2·E3·A6·A8)이 모두 직접 실행으로 확인됐다.

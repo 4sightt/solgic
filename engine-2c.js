@@ -1,5 +1,5 @@
 'use strict';
-const ENGINE_2C_VERSION='engine-2c v014';
+const ENGINE_2C_VERSION='engine-2c v015';
 function infer2C(io){
  const log=[ENGINE_2C_VERSION];
  const bad=msg=>({ok:false,engine:ENGINE_2C_VERSION,mode:'2C',checkLines:[ENGINE_2C_VERSION,msg],mine:[],safe:[],sol:0,exhausted:true});
@@ -161,6 +161,104 @@ function infer2C(io){
     if(mineBad&&safeBad)continue; if(mineBad)safe.add(v); else if(safeBad)mine.add(v) }
    return{safe,mine}}
 
+  // ---------- assumption existence probe 2C (general, candidate-by-candidate bounded existence search) ----------
+  // Unlike deduceAssumptionNumberClosure2C() (closure + small local-cluster pattern enumeration only), this tier
+  // asks a strictly weaker question per candidate/direction: "does AT LEAST ONE legal full 2C completion exist
+  // under this single assumption?" It does not enumerate or intersect all solutions (that is Tier B's job). It
+  // stops the moment it finds one legal completion (assumption is feasible, no conclusion), and only concludes the
+  // opposite assignment when the bounded search proves zero completions exist within budget. Search pruning is
+  // restricted to the same sound checks Tier B already uses: per-clue min/max, remaining-mine-count min/max,
+  // mine-component bounding-box-contains-fixed-safe, and mine-component sealed-off-from-diagonal-network-while-
+  // smaller-than-K. "Not yet a filled rectangle" is never used as a prune condition (unsound: a later mine can
+  // still complete the rectangle).
+  function existsLegalCompletion2C(mineArr0,safeArr0,budget){
+   const mineArr=mineArr0.slice(),safeArr=safeArr0.slice();
+   const remVars=vars.filter(v=>!mineArr[v]&&!safeArr[v]);
+   let fixedCount=0; for(let i=0;i<N;i++)if(mineArr[i])fixedCount++;
+   const need=K-fixedCount;
+   if(!remVars.length){
+    if(need!==0)return{exhausted:true,exists:false,nodes:0};
+    if(!checkRect(mineArr)||!diagConnected(mineArr))return{exhausted:true,exists:false,nodes:0};
+    return{exhausted:true,exists:true,nodes:0};
+   }
+   if(need<0||need>remVars.length)return{exhausted:true,exists:false,nodes:1};
+   const deg2=new Int16Array(N); for(const c of clues)for(const v of c.vn)deg2[v]++;
+   const searchVars2=remVars.slice().sort((a,b)=>(deg2[b]-deg2[a])||(a-b));
+   const varPos2=new Int32Array(N).fill(-1); searchVars2.forEach((v,k)=>varPos2[v]=k);
+   const varClues2=searchVars2.map(()=>[]); clues.forEach((c,ci)=>c.vn.forEach(v=>{const p=varPos2[v]; if(p>=0)varClues2[p].push(ci)}));
+   const curMine2=new Int16Array(clues.length),curUnd2=new Int16Array(clues.length);
+   for(let ci=0;ci<clues.length;ci++){let mc=0,und=0; for(const v of clues[ci].vn){if(mineArr[v])mc++; else if(!safeArr[v])und++} curMine2[ci]=mc; curUnd2[ci]=und}
+   const bits2=new Uint8Array(N); for(let i=0;i<N;i++)bits2[i]=mineArr[i];
+   let nodes=0,found=false,exhaustedFlag=true;
+   function minePrune2(v,k){const comp=componentOf(bits2,v); const b=bbox(comp);
+    for(let y=b.minY;y<=b.maxY;y++)for(let x=b.minX;x<=b.maxX;x++){const j=id(x,y); if(safeArr[j])return true}
+    if(comp.length<K){const compSet=new Set(comp); let sealed=true;
+     for(const cell of comp){const x=xOf(cell),y=yOf(cell); let brk=false;
+      for(const[dx,dy]of D8){const xx=x+dx,yy=y+dy; if(xx<0||yy<0||xx>=n||yy>=n)continue; const j=id(xx,yy); if(compSet.has(j))continue; if(bits2[j]){sealed=false;brk=true;break} if(varPos2[j]>=0&&varPos2[j]>=k){sealed=false;brk=true;break}}
+      if(brk)break}
+     if(sealed)return true}
+    return false}
+   function dfs2(k,placed){
+    if(found||!exhaustedFlag)return;
+    if(++nodes>budget){exhaustedFlag=false;return}
+    if(placed>need)return;
+    const rem=searchVars2.length-k; if(placed+rem<need)return;
+    if(k===searchVars2.length){ if(placed!==need)return; if(!checkRect(bits2)||!diagConnected(bits2))return; found=true; return }
+    const v=searchVars2[k],cs=varClues2[k];
+    const asSafe=()=>{let ok=true; for(const ci of cs){curUnd2[ci]--; if(curMine2[ci]+curUnd2[ci]<clues[ci].need)ok=false} if(ok)dfs2(k+1,placed); for(const ci of cs)curUnd2[ci]++};
+    const asMine=()=>{bits2[v]=1; let ok=true; for(const ci of cs){curMine2[ci]++;curUnd2[ci]--; if(curMine2[ci]>clues[ci].need)ok=false} if(ok&&!minePrune2(v,k))dfs2(k+1,placed+1); for(const ci of cs){curMine2[ci]--;curUnd2[ci]++} bits2[v]=0};
+    const mineFirst=cs.some(ci=>clues[ci].need-curMine2[ci]>=curUnd2[ci]-(clues[ci].need-curMine2[ci]));
+    if(mineFirst){asMine(); if(found||!exhaustedFlag)return; asSafe()}else{asSafe(); if(found||!exhaustedFlag)return; asMine()}
+   }
+   dfs2(0,0);
+   if(found)return{exhausted:true,exists:true,nodes};
+   if(!exhaustedFlag)return{exhausted:false,exists:false,nodes};
+   return{exhausted:true,exists:false,nodes};
+  }
+  // Candidates are restricted to closed variables that touch at least one number clue's frontier (cvarDeg>0), sorted
+  // by clue-degree descending (most-constrained / most-likely-important, e.g. D4-style candidates, first) so that a
+  // shared global node budget across this whole tier call is spent on the most relevant candidates first. Each
+  // candidate/direction first reuses the existing cheap closure+local-pattern check (same as
+  // checkAssumptionImpossible) before paying for the deep existence search; if the mine direction is already
+  // determined impossible, the safe direction is skipped entirely (no need to spend budget proving the converse).
+  // Per spec: a result list built in this single call never uses another candidate's new verdict from this same
+  // call as a premise — every candidate/direction always restarts from the original fixed board.
+  function deduceAssumptionExistenceProbe2C(){
+   const safe=new Set(),mine=new Set();
+   const PROBE_BUDGET_PER_DIRECTION=18000000,GLOBAL_PROBE_NODE_BUDGET=40000000;
+   const cvarDeg=new Int16Array(N); for(const c of clues)for(const v of c.vn)cvarDeg[v]++;
+   const candidates=vars.filter(v=>cvarDeg[v]>0).sort((a,b)=>(cvarDeg[b]-cvarDeg[a])||(a-b));
+   let globalRemaining=GLOBAL_PROBE_NODE_BUDGET;
+   for(const v of candidates){
+    if(globalRemaining<=0)break;
+    let mineImpossible=false;
+    {
+     const cs=closureAndStructural([v],[]);
+     if(cs.contradiction)mineImpossible=true;
+     else if(localPatternRescue(cs.mineArr,cs.safeArr,v))mineImpossible=true;
+     else if(globalRemaining>0){
+      const budget=Math.min(PROBE_BUDGET_PER_DIRECTION,globalRemaining);
+      const r=existsLegalCompletion2C(cs.mineArr,cs.safeArr,budget);
+      globalRemaining-=r.nodes;
+      if(r.exhausted&&!r.exists)mineImpossible=true;
+     }
+    }
+    if(mineImpossible){ safe.add(v); continue }
+    if(globalRemaining<=0)continue;
+    {
+     const cs=closureAndStructural([],[v]);
+     if(cs.contradiction){ mine.add(v); continue }
+     if(localPatternRescue(cs.mineArr,cs.safeArr,v)){ mine.add(v); continue }
+     if(globalRemaining>0){
+      const budget=Math.min(PROBE_BUDGET_PER_DIRECTION,globalRemaining);
+      const r=existsLegalCompletion2C(cs.mineArr,cs.safeArr,budget);
+      globalRemaining-=r.nodes;
+      if(r.exhausted&&!r.exists)mine.add(v);
+     }
+    }
+   }
+   return{safe,mine}}
+
   // ===================== execution order (conservative) =====================
   const safeA=new Set(),mineA=new Set(); exact(clues.map(c=>({cells:c.vn,need:c.need})),safeA,mineA); if(totalFlags===K)for(const v of vars)safeA.add(v); if(totalFlags+vars.length===K)for(const v of vars)mineA.add(v); for(const j of safeA)if(mineA.has(j))return bad(`contradiction: ${lab(xOf(j),yOf(j))} forced safe and mine`); if(safeA.size||mineA.size)return ret(safeA,mineA,'deduce(number rule): forced by single clue / total count');
 
@@ -204,6 +302,11 @@ function infer2C(io){
   // pattern-enumeration fallback when closure alone is inconclusive. Gated to large boards, after the other
   // general 1-step tiers, before full exhaustive search.
   if(vars.length>24){const r=mergeReturn(deduceAssumptionNumberClosure2C(),'tier general: assumption number-closure 2C contradiction'); if(r)return r}
+
+  // (8) assumption existence probe 2C (general). Each candidate/direction asks only "does any legal completion
+  // exist", not "what is the full solution set" — far cheaper than Tier B's exhaustive intersection, but still
+  // gated to large boards and run after every cheaper general tier has already failed to find anything.
+  if(vars.length>24){const r=mergeReturn(deduceAssumptionExistenceProbe2C(),'tier general: assumption existence probe 2C'); if(r)return r}
 
   // ===================== full 2C search (Tier B) with sound pruning =====================
   const need=K-totalFlags,deg=new Int16Array(N); for(const c of clues)for(const v of c.vn)deg[v]++; const searchVars=vars.slice().sort((a,b)=>(deg[b]-deg[a])||(a-b)),varPos=new Int32Array(N).fill(-1); searchVars.forEach((v,k)=>varPos[v]=k); const varClues=searchVars.map(()=>[]); clues.forEach((c,ci)=>c.vn.forEach(v=>varClues[varPos[v]].push(ci))); const curMine=new Int16Array(clues.length),curUnd=clues.map(c=>c.vn.length),bits=new Uint8Array(N),OR=new Uint8Array(N),AND=new Uint8Array(N).fill(1); for(let i=0;i<N;i++)bits[i]=fixedMine[i]; let sol=0,nodes=0,exhausted=true; const BUDGET=12000000;
