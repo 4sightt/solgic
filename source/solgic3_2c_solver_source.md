@@ -1444,6 +1444,84 @@ mine: []
 
 ---
 
+### 추가 테스트 25: 8x8, 추가 테스트 24 후속 + 일반화된 가정-숫자-closure 2C 모순
+
+보드:
+
+```text
+1 1 0 1 . . . .
+F 2 ? 3 . . . ?
+. . . . . . . .
+. . . . . . . .
+. . 3 . 2 . . .
+. . . . . . 4 F
+. . ? . . ? . 3
+2 . . . . . . .
+```
+
+크기: 8
+총 지뢰: 26
+모드: 2C
+
+현재 고정 상태:
+
+- numbers: `A1=1`, `B1=1`, `C1=0`, `D1=1`, `B2=2`, `D2=3`, `C5=3`, `E5=2`, `G6=4`, `H7=3`, `A8=2`
+- opened safe without number: `C2=?`, `H2=?`, `C7=?`, `F7=?`
+- flags: `A2`, `H6`
+
+확인된 판정:
+
+```text
+우클릭 E1, D3, E3
+좌클릭 C3, E2
+```
+
+기대 반환:
+
+```js
+safe: ["C3","E2"]
+mine: ["D3","E1","E3"]
+```
+
+반례/주의:
+
+- `A3`, `B3`은 이 단계에서 확정 safe가 아니다. `C3`를 mine으로 가정했을 때만 `B2=2` 때문에 강제 safe가 되는 칸이므로 결과에 넣지 않는다(가정 하나가 무너졌다고 해서 그 가정 안에서 파생된 강제 결과를 실제 판정으로 반환하면 안 된다).
+- `G7`, `G8`, `H8`은 이 단계에서 개별 확정이 아니다. `H7=3`과 `H6` flag 때문에 `{G7,G8,H8}` 중 정확히 2칸이 지뢰일 뿐이며, 추가 테스트 23/24와 같은 이유로 어느 2칸인지 분리되지 않는다.
+- `D4`, `E4`, `F4`, `D5`, `E6` 등 후속 연쇄 가능 칸은 이번 1-step 결과에 포함하지 않는다.
+- `C2`, `H2`, `C7`, `F7`은 `?`(opened safe without number)이며 추론 대상 변수가 아니므로 반환 후보에서 항상 제외된다.
+
+핵심 논리 (각 후보를 현재 고정 보드에서 독립적으로 가정-검증):
+
+- `C3=mine` 가정: `B2=2`가 flag `A2` + 가정 `C3`로 충족되어, `B2`의 나머지 후보 `A3`,`B3`이 closure로 강제 safe가 된다. 이 강제 safe들이 기존 flag 컴포넌트 `A2`의 8방향을 전부 막아(`A1`,`B1`,`B2`는 고정 숫자 안전, `A3`,`B3`은 이번 가정의 강제 안전) `A2` 컴포넌트가 완전히 봉쇄된 단독 1칸 컴포넌트가 된다. 총 지뢰 수 26이 `A2` 단독 컴포넌트보다 크므로 다른 지뢰 그룹이 반드시 존재해야 하는데, 봉쇄된 `A2`는 대각 연결망에 합류할 수 없다. 따라서 `C3=mine` 가정은 모순이고 `C3`는 safe 확정이다. (이 모순은 가정 후보 자신의 컴포넌트가 아니라 **기존에 이미 존재하던 flag 컴포넌트**가 가정으로 인한 강제 safe 때문에 봉쇄되는 경우라, 일반 계층이 "가정 후보가 속한 컴포넌트만"이 아니라 **현재 모든 임시 지뢰 컴포넌트**를 검사해야 잡힌다.)
+- `D3=safe` 가정: closure만으로는 바로 끝나지 않아 로컬 클러스터 패턴 열거로 넘어간다. `D3`를 포함하는 단서는 `D2=3` 하나뿐이고, `D2`의 frontier(`E1`,`C3`,`D3`,`E2`,`E3`)를 BFS로 확장하면 `D1=1`(공유 변수 `E1`,`E2`)과 `B2=2`(공유 변수 `C3`)까지 클러스터에 포함되어 frontier 변수는 `{E1,E2,C3,E3,A3,B3}`(`D3`는 가정으로 고정되어 제외) 6개로 작아진다. `D1=1`은 `{E1,E2}` 중 정확히 1개, `D2=3`은 `D3=safe`이므로 `{E1,C3,E2,E3}` 중 정확히 3개, `B2=2`는 `{A3,B3,C3}` 중 정확히 1개가 지뢰여야 한다. 이 제약을 만족하는 모든 0/1 패턴을 열거해 각각에 2C 즉시 모순(바운딩박스 안전칸 포함 / 대각 봉쇄)을 적용하면, 남는 패턴이 하나도 없다. 따라서 `D3=safe` 가정은 불가능하고 `D3`는 mine 확정이다.
+- `E3=safe` 가정도 같은 클러스터(`D2`,`D1`,`B2`)에서 같은 방식으로 로컬 패턴을 모두 열거하면 합법 패턴이 남지 않는다. 따라서 `E3`는 mine 확정이다.
+- `E2=mine` 가정도 같은 클러스터를 열거하면, `E2`가 지뢰가 되는 모든 합법 후보 조합이 바운딩박스 안전칸 포함 모순(특히 `D2`가 속한 4-연결 컴포넌트가 비직사각형이 되는 경우) 또는 대각 봉쇄 모순으로 전부 제거된다. 따라서 `E2=mine` 가정은 불가능하고 `E2`는 safe 확정이다.
+- `E1=safe` 가정: `D1=1`의 closure가 즉시 `E2`를 강제 mine으로 만들고(`{E1,E2}` 중 1개, `E1`이 safe이므로 `E2`가 mine), 이어서 같은 6변수 클러스터(`{C3,D3,E3,A3,B3}`, `E2`는 closure로 이미 결정됨)를 열거하면 두 갈래로 모두 모순이 난다: (1) `C3=mine`이면 위 `A2` 대각 봉쇄 모순과 동일한 이유로 즉시 모순. (2) `C3=safe`이면 `D2=3`을 만족하려 `D3`,`E3`가 모두 mine이 되어야 하는데, `D3`(3,2)·`E3`(4,2)·`E2`(4,1)가 4-연결로 합쳐진 컴포넌트의 바운딩박스가 `D2`(3,1)를 포함하게 되어(바운딩박스 `D2:E3`, 고정 숫자 안전칸 `D2` 포함) 즉시 모순이다. 두 갈래 모두 막히므로 `E1=safe` 가정은 불가능하고 `E1`은 mine 확정이다.
+
+이 다섯 판정 모두 **같은 호출 안에서 서로를 전제로 쓰지 않는다.** 각 후보(`C3`,`D3`,`E3`,`E2`,`E1`)는 매번 원래의 고정 보드(flag `A2`,`H6` + 숫자 + `?`)에서 독립적으로 가정-검증된다. 예를 들어 `E1` 판정의 클로저 단계에서 `E2`가 mine으로 강제되는 것은 `E1` 자신의 가정 체인 안에서 일어나는 부수 효과일 뿐, "이미 `E2`가 safe로 확정됐다"는 사실을 갖고 온 것이 아니다.
+
+구현 메모:
+
+- `engine-2c v014`에서 **새 일반 계층 `deduceAssumptionNumberClosure2C()`**(checkLines 문구 `tier general: assumption number-closure 2C contradiction`)로 반영했다. 이번 패턴을 타깃 하드코딩이 아니라 일반화된 1-step frontier 계층으로 처리한 첫 케이스다.
+- 알고리즘 개요(각 닫힌 변수 `v`에 대해 `mine`/`safe` 두 가정을 독립적으로, 항상 현재 고정 보드에서 새로 검사):
+  1. **숫자 closure** (`closureAndStructural()`): flag/숫자/`?` 같은 기존 고정 상태 + 이번 가정만 시드로 두고, 모든 숫자 단서에 대해 `mineCount>need` 또는 `mineCount+unknownCount<need`면 모순, `mineCount===need`면 남은 후보 전부 강제 safe, `mineCount+unknownCount===need`면 남은 후보 전부 강제 mine으로 큐 방식 반복 적용한다.
+  2. **2C 즉시 모순 검사**를 closure 결과에 적용한다. (a) 바운딩박스 모순: 임시 지뢰(고정 flag + 가정/강제 mine)로 만든 모든 4-연결 컴포넌트의 바운딩박스 안에 고정/강제 safe가 있으면 모순. (b) 대각 봉쇄 모순: 위 모든 컴포넌트 중 8방향이 전부 보드 밖/고정 또는 강제 safe로 막혀 있고(미확정 칸이 단 하나도 없을 때만) 크기가 총 지뢰 수 `K`보다 작으면 모순. **이 두 검사는 가정 후보 자신의 컴포넌트만이 아니라 현재 임시 지뢰 배열에서 만들어지는 모든 컴포넌트(기존 flag 컴포넌트 포함)를 대상으로 한다** — `C3=mine` 가정에서 기존 `A2` flag 컴포넌트가 봉쇄되는 경우가 바로 이 일반화가 필요한 이유다.
+  3. closure+구조 검사만으로 모순이 안 나오면 **로컬 클러스터 패턴 열거** (`localPatternRescue()`)로 넘어간다. 후보 `v`를 이웃으로 갖는 숫자 단서를 시작점으로, frontier 변수를 공유하는 숫자 단서들을 클루-인접 그래프 위에서 BFS로 확장한다(변수가 closure로 이미 결정됐는지와 무관하게 클루 자체는 항상 확장한다 — `E1` 케이스처럼 `D1`→`D2`(공유 변수 `E2`가 이미 결정돼도 클루 `D2` 자체는 연결돼야 한다)). 이렇게 모인 클러스터에서 **아직 미확정인** frontier 변수만 모아 열거 대상으로 삼고(상한 18개), 0/1 전체 조합 중 클러스터 내 모든 숫자 단서를 만족하는 패턴만 남긴 뒤, 각 패턴에 2번의 두 즉시 모순 검사를 다시 적용한다. 단 하나도 합법 패턴이 남지 않으면 그 가정은 불가능이다. 합법 패턴이 하나라도 남으면(이번 호출에서는 첫 합법 패턴을 찾는 즉시 조기 종료) 그 가정은 판정하지 않는다.
+  4. `mine` 가정이 불가능하면 후보는 safe, `safe` 가정이 불가능하면 후보는 mine. 둘 다 불가능하면(이론상 일관된 보드에서는 발생하지 않아야 함) 보수적으로 아무것도 반환하지 않는다.
+- 건전성 기준은 기존 v013 일반화 계층들과 동일하게 두 가지만 사용한다: (1) 강제 지뢰 컴포넌트의 바운딩박스 안에 고정/강제 안전칸이 있으면 제거, (2) 컴포넌트가 8방향으로 완전히 봉쇄돼 대각 연결망에 합류할 수 없고 크기가 `K`보다 작으면 제거. "현재 컴포넌트가 아직 꽉 찬 직사각형이 아니다"라는 기준은 사용하지 않는다(단서 밖 미확정 칸이 나중에 지뢰가 되어 직사각형을 완성할 수 있기 때문에 비건전하다).
+- 실행 순서: 기존 숫자 즉시 판정 → number algebra → symmetric numeric diff → 현재 지뢰 컴포넌트 직사각형 완성 → 기존 타깃 frontier(추가 테스트 7~24) → candidate-as-mine 직사각형 모순 → single clue 2C pattern → small clue cluster 2C pattern → **(신규) assumption number-closure 2C contradiction** → 완전 탐색(Tier B) → 예산 초과 fallback(candidate-as-safe forced-mine 모순, corner diagonal blockage). 기존 general 계층들 뒤, Tier B 앞에 배치했다. `vars.length>24` 게이트도 기존 general 계층들과 동일하게 적용한다.
+  - 배치 이유(회귀 확인): 추가 테스트 7·21·23은 이 신규 계층 이전의 기존 general 계층(`single clue 2C pattern`, `candidate-as-mine rectangle contradiction`)에서 이미 통과되어 신규 계층에 도달하지 않는다. 추가 테스트 9·10·11·12·13·14~20·22·24는 `mineRect`/`number algebra`/기존 타깃 블록에서 신규 계층보다 먼저 통과한다. 추가 테스트 8은 `vars.length=18≤24`라 게이트에 막혀 신규 계층이 아예 실행되지 않고, 기존처럼 완전 탐색이 `sol===0`으로 모순을 반환한다. 즉 추가 테스트 7~24 중 단 하나도 신규 계층에 도달하지 않으므로, 신규 계층을 이 위치에 두어도 기존 결과가 바뀌지 않는다. 이 보드(추가 테스트 25, `vars.length=47>24`)는 기존 타깃 블록과 일반 계층 어디에도 매칭되지 않고 v013에서는 완전 탐색이 예산 초과(`safe:[]`,`mine:[]`,경고)로 멈췄던 자리이므로, 신규 계층이 Tier B 앞에서 정확한 결과를 반환한다.
+- `checkLines`에 `tier general: assumption number-closure 2C contradiction`, `deduce: mine=3 safe=2` 문구가 포함된다.
+- 반환은 `safe: ["C3","E2"]`, `mine: ["D3","E1","E3"]`이며, 반환 칸이 이미 열린 숫자/`?`/flag이면 결과에서 제외한다(일반 계층은 `vars`만 순회하므로 자연히 제외됨).
+
+회귀 테스트:
+
+- 이 보드에서 `safe`는 정확히 `["C3","E2"]`, `mine`은 정확히 `["D3","E1","E3"]`이어야 한다.
+- `A3`, `B3`, `G7`, `G8`, `H8`, `C2`, `H2`, `C7`, `F7`은 safe/mine 어느 쪽에도 없어야 한다.
+- 기존 추가 테스트 7~24의 결과(`safe`/`mine`)는 이 계층 추가 이전과 동일하게 유지된다. 특히 추가 테스트 19/20/21의 `H8`(및 20·21의 `H6`) 미반환, 추가 테스트 23/24의 `G7/G8/H8` 미반환 조건이 그대로 유지된다. 직접 실행한 회귀 테스트에서 추가 테스트 7~24와 추가 테스트 25 전부 통과를 확인했다(`engine-2c v014`).
+
+---
+
 ## 2C 엔진 구현 보강 메모
 
 ### 권장 추론 계층
@@ -1620,3 +1698,54 @@ leaf에서만 2C 검사를 하던 완전 탐색에 건전한 중간 가지치기
 - 반환 후보가 이미 열린 숫자/`?`/flag이면 결과에서 제외한다(일반 계층은 `vars`만 순회, 타깃은 `varId()`로 필터).
 - **타깃 보강은 앞으로도 마지막 수단이다.** 새 케이스가 생기면 먼저 일반 규칙(또는 일반 규칙의 건전한 확장)을 추가하고, 일반화가 어렵거나 예산 초과로만 막히는 경우에 한해, 완전 탐색으로 검증한 결과를 보수적 타깃으로 둔다(현재 추가 테스트 10이 이 경우).
 - 확신이 없으면 반환하지 않는다. 패턴/탐색 가지치기는 건전한 즉시 모순만 사용한다(비건전 가지치기 금지).
+
+---
+
+## 타깃에서 일반 계층으로: 추가 테스트 25와 engine-2c v014
+
+`engine-2c v014`에서 추가 테스트 25(8x8, `C3`/`E2` safe, `D3`/`E1`/`E3` mine)를 **타깃 하드코딩이 아니라** 새 일반 계층 `deduceAssumptionNumberClosure2C()`로 처리했다. 자세한 보드/논리/구현 메모는 위 "추가 테스트 25" 절을 참고한다. 이 절은 v013 승격 요약과 같은 형식으로 v014 변경을 짧게 정리한다.
+
+### 새로 추가한 일반 함수
+
+1. `closureAndStructural(forceMineList, forceSafeList)` — 후보 가정(들)을 시드로 숫자 closure를 안정화될 때까지 반복하고, 결과 mine/safe 배열에 두 건전한 2C 즉시 모순(바운딩박스 안전칸 포함, 대각 봉쇄)을 **모든 임시 지뢰 컴포넌트**(기존 flag 컴포넌트 포함)에 적용한다. 모순이면 `{contradiction:true}`, 아니면 closure 후 `mineArr`/`safeArr`를 반환한다.
+2. `localPatternRescue(mineArr, safeArr, seedVar)` — closure만으로 모순이 안 나올 때, 후보를 이웃으로 갖는 숫자 단서에서 시작해 클루-인접 그래프를 BFS로 확장한 로컬 클러스터의 **미확정** frontier 변수(상한 18개)를 모두 열거하고, 숫자 제약 + 위 두 즉시 모순으로 패턴을 제거한다. 합법 패턴이 하나도 없으면 `true`(모순 증명), 하나라도 있으면(조기 종료) `false`를 반환한다.
+3. `checkAssumptionImpossible(v, asMine)` — 위 두 함수를 합쳐 후보 `v`의 한 방향 가정(`mine` 또는 `safe`)이 불가능한지 판정한다.
+4. `deduceAssumptionNumberClosure2C()` — 모든 닫힌 변수에 대해 `mine`/`safe` 두 가정을 각각 독립적으로(항상 고정 보드에서 새로 시작) 검사하고, 한쪽이 불가능하면 반대쪽을 결과에 추가한다.
+
+### 일반화의 핵심: "후보 자신의 컴포넌트"가 아니라 "모든 임시 컴포넌트"
+
+기존 `deduceCandidateAsMineRectContradiction()`/`deduceCornerDiagonalBlockage()`(v010/v013)는 가정 후보가 만드는 컴포넌트만 검사했다. 추가 테스트 25의 `C3=mine` 가정은 **기존 flag 컴포넌트 `A2`**가 가정으로 인한 강제 safe(`A3`,`B3`)에 의해 봉쇄되는 경우라, 후보 자신의 컴포넌트만 보는 기존 함수로는 잡히지 않았다. `closureAndStructural()`/`localPatternRescue()`는 항상 `compsOf(mineArr)`(또는 `compsOf(tempMine)`) 전체를 순회해 모든 컴포넌트를 검사하므로 이 케이스를 포함한다.
+
+### 실행 순서에 추가한 위치
+
+기존 general 계층(`candidate-as-mine rectangle contradiction`, `single clue 2C pattern`, `small clue cluster 2C pattern`) 뒤, 완전 탐색(Tier B) 앞에 배치했다(`vars.length>24` 게이트 동일 적용). 추가 테스트 7~24는 모두 이 신규 계층 이전 단계(기존 general 계층 또는 타깃 블록 또는 `mineRect`/`number algebra`, 혹은 게이트 미달로 완전 탐색 자체)에서 이미 처리되어 신규 계층에 도달하지 않으므로, 이 배치는 기존 결과를 바꾸지 않는다. 자세한 회귀 확인은 위 "추가 테스트 25" 절의 "배치 이유" 항목을 참고한다.
+
+### 새 checkLines 문구
+
+- `tier general: assumption number-closure 2C contradiction`
+
+### 회귀 테스트 결과 (추가 테스트 7~25, 전부 통과)
+
+| # | 기대 | 발동 계층 |
+|---|---|---|
+| 7 | mine B4·B6·C4 | tier general: single clue 2C pattern |
+| 8 | contradiction (no legal 2C layout) | (number/총량 모순 또는 완전 탐색 `sol=0`) |
+| 9 | mine G4 | deduce(2C rectangle) |
+| 10 | safe G2 | target: 7x7 G2 (search-verified) |
+| 11 | safe C3·C4·C5·D3·D5 | deduce(number algebra) |
+| 12 | safe C2·C6·E2·E3, mine C7·F3 | deduce(2C validated) target |
+| 13 | safe F7 | deduce(2C validated) target |
+| 14 | safe E4·E5·F5·G3·G4·G5, mine C3·E1·F3 | deduce(2C validated) target |
+| 15 | safe E3 | deduce(2C validated) target |
+| 16 | safe G2·G3·G4, mine D4 | deduce(2C validated) target |
+| 17 | safe D5·E4·G1, mine F1·F2·F4 | deduce(2C validated) target |
+| 18 | safe A8·F6·F8, mine F3·F7·G8 | target |
+| 19 | mine B6·C7·G6 (H8 미반환) | target |
+| 20 | safe C5, mine F5 (H6·H8 미반환) | tier general: symmetric numeric diff |
+| 21 | safe G5 (H6·H8 미반환) | tier general: candidate-as-mine rectangle contradiction |
+| 22 | safe D3·D4·D5·D8·G3·G4, mine D7·E3·E4·E5·F4·G1·H2·H3·H4 | target |
+| 23 | mine H6만 (G7·G8·H8 미반환) | tier general: single clue 2C pattern |
+| 24 | safe A1만 (G7·G8·H8 미반환) | tier general: corner diagonal blockage |
+| 25 | safe C3·E2, mine D3·E1·E3 (A3·B3·G7·G8·H8 미반환) | tier general: assumption number-closure 2C contradiction |
+
+추가 테스트 7~24의 비반환 회귀 조건(19의 H8, 20·21의 H6/H8, 23·24의 G7/G8/H8)과 추가 테스트 25의 비반환 조건(A3·B3·G7·G8·H8·C2·H2·C7·F7)이 모두 직접 실행으로 확인됐다.

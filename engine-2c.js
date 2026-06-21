@@ -1,5 +1,5 @@
 'use strict';
-const ENGINE_2C_VERSION='engine-2c v013';
+const ENGINE_2C_VERSION='engine-2c v014';
 function infer2C(io){
  const log=[ENGINE_2C_VERSION];
  const bad=msg=>({ok:false,engine:ENGINE_2C_VERSION,mode:'2C',checkLines:[ENGINE_2C_VERSION,msg],mine:[],safe:[],sol:0,exhausted:true});
@@ -96,6 +96,71 @@ function infer2C(io){
 
   function mergeReturn(res,why){const{safe,mine}=res; for(const j of safe)if(mine.has(j))return bad(`contradiction: ${lab(xOf(j),yOf(j))} forced safe and mine`); if(safe.size||mine.size)return ret(safe,mine,why); return null}
 
+  // ---------- assumption number-closure 2C (general 1-step, candidate-by-candidate) ----------
+  function compBBoxHasSafeArr(comp,safeArr){const b=bbox(comp); for(let y=b.minY;y<=b.maxY;y++)for(let x=b.minX;x<=b.maxX;x++)if(safeArr[id(x,y)])return true; return false}
+  function diagonalBlockageContradictionArr(mineArr,safeArr){
+   for(const comp of compsOf(mineArr)){ const compSet=new Set(comp); let sealed=true;
+    for(const cell of comp){const x=xOf(cell),y=yOf(cell); let brk=false;
+     for(const[dx,dy]of D8){const xx=x+dx,yy=y+dy; if(xx<0||yy<0||xx>=n||yy>=n)continue; const j=id(xx,yy); if(compSet.has(j))continue; if(mineArr[j]){sealed=false;brk=true;break} if(safeArr[j])continue; sealed=false;brk=true;break}
+     if(brk)break}
+    if(sealed&&comp.length<K)return true }
+   return false}
+  // number closure: propagate forced safe/mine from the per-clue need vs current mine/unknown counts, starting from a
+  // single candidate assumption, until stable or contradiction. Then apply the two sound 2C immediate-contradiction
+  // checks (rectangle bbox-safe, diagonal-blockage-sealed) to ALL current mine components (including pre-existing
+  // flag components), not just the candidate's own.
+  function closureAndStructural(forceMineList,forceSafeList){
+   const mineArr=fixedMine.slice(),safeArr=fixedSafe.slice();
+   for(const v of forceMineList){ if(safeArr[v])return{contradiction:true}; mineArr[v]=1 }
+   for(const v of forceSafeList){ if(mineArr[v])return{contradiction:true}; safeArr[v]=1 }
+   let changed=true;
+   while(changed){ changed=false;
+    for(const c of clues){ let mc=0; const unk=[];
+     for(const v of c.vn){ if(mineArr[v])mc++; else if(!safeArr[v])unk.push(v) }
+     if(mc>c.need)return{contradiction:true};
+     if(mc+unk.length<c.need)return{contradiction:true};
+     if(!unk.length)continue;
+     if(mc===c.need){ for(const u of unk){ if(mineArr[u])return{contradiction:true}; safeArr[u]=1 } changed=true }
+     else if(mc+unk.length===c.need){ for(const u of unk){ if(safeArr[u])return{contradiction:true}; mineArr[u]=1 } changed=true }
+    }
+   }
+   for(const comp of compsOf(mineArr))if(compBBoxHasSafeArr(comp,safeArr))return{contradiction:true};
+   if(diagonalBlockageContradictionArr(mineArr,safeArr))return{contradiction:true};
+   return{contradiction:false,mineArr,safeArr}}
+  // small local cluster pattern enumeration fallback: gather the connected clue cluster (via shared neighbor
+  // variables, BFS over the clue-adjacency graph) that contains the candidate, enumerate legal mine/safe patterns
+  // for the still-undetermined frontier (capped at 18 variables), and check whether at least one pattern survives
+  // both the numeric clue constraints and the two sound 2C immediate-contradiction checks. If none survive, the
+  // assumption that produced (mineArr,safeArr) is impossible.
+  function localPatternRescue(mineArr,safeArr,seedVar){
+   const cvar=new Map(); clues.forEach((c,ci)=>c.vn.forEach(v=>{ if(!cvar.has(v))cvar.set(v,[]); cvar.get(v).push(ci) }));
+   const seedClues=cvar.get(seedVar); if(!seedClues||!seedClues.length)return false;
+   const seenC=new Set(seedClues),stack=seedClues.slice(),group=[];
+   while(stack.length){ const cur=stack.pop(); group.push(cur);
+    for(const v of clues[cur].vn)for(const oc of(cvar.get(v)||[]))if(!seenC.has(oc)){seenC.add(oc); stack.push(oc)} }
+   const varSet=new Set(); for(const g of group)for(const v of clues[g].vn)if(!mineArr[v]&&!safeArr[v])varSet.add(v);
+   const fvars=[...varSet]; if(!fvars.length||fvars.length>18)return false;
+   const gclues=group.map(g=>clues[g]); const assign=new Uint8Array(N); let foundLegal=false;
+   const rec=idx=>{ if(foundLegal)return;
+    if(idx===fvars.length){
+     for(const gc of gclues){ let mc=0; for(const v of gc.vn){ if(mineArr[v]||assign[v])mc++ } if(mc!==gc.need)return }
+     const tempMine=mineArr.slice(),tempSafe=safeArr.slice();
+     for(const v of fvars){ if(assign[v])tempMine[v]=1; else tempSafe[v]=1 }
+     for(const comp of compsOf(tempMine))if(compBBoxHasSafeArr(comp,tempSafe))return;
+     if(diagonalBlockageContradictionArr(tempMine,tempSafe))return;
+     foundLegal=true; return }
+    const v=fvars[idx]; assign[v]=1; rec(idx+1); assign[v]=0; if(foundLegal)return; rec(idx+1) };
+   rec(0);
+   return!foundLegal}
+  function checkAssumptionImpossible(v,asMine){
+   const cs=closureAndStructural(asMine?[v]:[],asMine?[]:[v]);
+   if(cs.contradiction)return true;
+   return localPatternRescue(cs.mineArr,cs.safeArr,v)}
+  function deduceAssumptionNumberClosure2C(){const safe=new Set(),mine=new Set();
+   for(const v of vars){ const mineBad=checkAssumptionImpossible(v,true),safeBad=checkAssumptionImpossible(v,false);
+    if(mineBad&&safeBad)continue; if(mineBad)safe.add(v); else if(safeBad)mine.add(v) }
+   return{safe,mine}}
+
   // ===================== execution order (conservative) =====================
   const safeA=new Set(),mineA=new Set(); exact(clues.map(c=>({cells:c.vn,need:c.need})),safeA,mineA); if(totalFlags===K)for(const v of vars)safeA.add(v); if(totalFlags+vars.length===K)for(const v of vars)mineA.add(v); for(const j of safeA)if(mineA.has(j))return bad(`contradiction: ${lab(xOf(j),yOf(j))} forced safe and mine`); if(safeA.size||mineA.size)return ret(safeA,mineA,'deduce(number rule): forced by single clue / total count');
 
@@ -132,6 +197,13 @@ function infer2C(io){
   // (5)+(6) single-clue / small-cluster local pattern enumeration with immediate 2C contradiction.
   if(vars.length>24){const r=mergeReturn(deduceSingleCluePattern2C(),'tier general: single clue 2C pattern'); if(r)return r}
   if(vars.length>24){const r=mergeReturn(deduceSmallClueCluster2C(),'tier general: small clue cluster 2C pattern'); if(r)return r}
+
+  // (7) assumption number-closure 2C contradiction (general). Each candidate independently assumed mine/safe from
+  // the current fixed board; number closure + sound 2C structural contradiction (rectangle bbox-safe / diagonal
+  // blockage, checked across ALL mine components including pre-existing flag components) with a small local
+  // pattern-enumeration fallback when closure alone is inconclusive. Gated to large boards, after the other
+  // general 1-step tiers, before full exhaustive search.
+  if(vars.length>24){const r=mergeReturn(deduceAssumptionNumberClosure2C(),'tier general: assumption number-closure 2C contradiction'); if(r)return r}
 
   // ===================== full 2C search (Tier B) with sound pruning =====================
   const need=K-totalFlags,deg=new Int16Array(N); for(const c of clues)for(const v of c.vn)deg[v]++; const searchVars=vars.slice().sort((a,b)=>(deg[b]-deg[a])||(a-b)),varPos=new Int32Array(N).fill(-1); searchVars.forEach((v,k)=>varPos[v]=k); const varClues=searchVars.map(()=>[]); clues.forEach((c,ci)=>c.vn.forEach(v=>varClues[varPos[v]].push(ci))); const curMine=new Int16Array(clues.length),curUnd=clues.map(c=>c.vn.length),bits=new Uint8Array(N),OR=new Uint8Array(N),AND=new Uint8Array(N).fill(1); for(let i=0;i<N;i++)bits[i]=fixedMine[i]; let sol=0,nodes=0,exhausted=true; const BUDGET=12000000;
