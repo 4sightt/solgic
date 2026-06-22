@@ -1,5 +1,5 @@
 'use strict';
-const ENGINE_2C_VERSION='engine-2c v016';
+const ENGINE_2C_VERSION='engine-2c v017';
 function infer2C(io){
  const log=[ENGINE_2C_VERSION];
  const bad=msg=>({ok:false,engine:ENGINE_2C_VERSION,mode:'2C',checkLines:[ENGINE_2C_VERSION,msg],mine:[],safe:[],sol:0,exhausted:true});
@@ -319,6 +319,33 @@ function infer2C(io){
     for(let h=1;h<=hMax;h++){ let w=0; for(let x=x0;x<n;x++){let ok=true; for(let y=y0;y<y0+h;y++)if(!open[id(x,y)]){ok=false;break} if(!ok)break; w++} const rw=Math.min(prevW,w); prevW=rw; if(rw===0)break; count+=rw }
    }
    return count}
+  // v017: choose one of the 8 grid symmetries (transpose x/y + independent flips) to run the SAME canonical
+  // row-major rectangle-anchor scan over, instead of always starting at the literal top-left in real (x,y)
+  // space. This is sound by construction (not a new search algorithm): every dihedral symmetry of a square
+  // maps axis-aligned rectangles to axis-aligned rectangles and preserves 4-/8-adjacency, so the existing
+  // canonical-anchor proof (the rectangle covering the scan-order-first uncovered cell must itself contain
+  // that cell as ITS scan-order-first cell, which is exactly what "extend only in +u,+v from the anchor"
+  // guarantees) carries over unchanged to any of the 8 relabelings. Only WHICH cells get decided first changes.
+  // v016 always scanned literal row-major top-to-bottom/left-to-right, which on boards like additional tests
+  // 28-31 means a wide clue-free "open" region gets explored (and its astronomically many distinct rectangle
+  // tilings enumerated) before the small, tightly-constrained flag/number cluster is ever reached — by the time
+  // the search reaches the clue cluster, the tight per-clue/global pruning has had no chance to cut anything in
+  // the free region yet, so every one of those free-region tilings pays the full cost of the clue cluster's
+  // search again. Picking the orientation whose row-major order visits flags / high-clue-degree cells earliest
+  // makes the global min-mine-count bound (see uncoveredVarCount below) tight much sooner, which is what
+  // actually cuts the explosion — the reorder itself does not change soundness or completeness at all.
+  function chooseRectScanOrientation(open,cellClues){
+   const weight=new Float64Array(N);
+   for(let i=0;i<N;i++){ if(!open[i])continue; let w=cellClues[i].length; if(fixedMine[i])w+=4; weight[i]=w; }
+   let best=null,bestScore=-Infinity;
+   for(const primary of['y','x'])for(const sx of[1,-1])for(const sy of[1,-1]){
+    const realX=(u,v)=>primary==='y'?(sx>0?v:n-1-v):(sx>0?u:n-1-u);
+    const realY=(u,v)=>primary==='y'?(sy>0?u:n-1-u):(sy>0?v:n-1-v);
+    let score=0,rank=0;
+    for(let u=0;u<n;u++)for(let v=0;v<n;v++){ const i=id(realX(u,v),realY(u,v)); if(open[i])score+=weight[i]*(N-rank); rank++ }
+    if(score>bestScore){bestScore=score; best={primary,sx,sy,realX,realY,label:`primary=${primary},sx=${sx},sy=${sy}`}}
+   }
+   return best}
   function deduceRectangleCandidateSolver2C(budget){
    const open=new Uint8Array(N); for(let i=0;i<N;i++)open[i]=(isVar[i]||fixedMine[i])?1:0;
    const cellClues=new Array(N); for(let i=0;i<N;i++)cellClues[i]=[];
@@ -326,39 +353,60 @@ function infer2C(io){
    const curMine=new Int16Array(clues.length), curUnd=new Int16Array(clues.length);
    clues.forEach((c,ci)=>curUnd[ci]=c.vn.length);
    const covered=new Uint8Array(N); // 0 uncovered, 1 safe, 2 mine
-   const rectInfo=[]; // {minX,maxX,minY,maxY} for every currently-selected rectangle
-   const order=[]; for(let y=0;y<n;y++)for(let x=0;x<n;x++)if(open[id(x,y)])order.push(id(x,y));
+   const rectInfo=[]; // {minX,maxX,minY,maxY} for every currently-selected rectangle, always in REAL coordinates
+   const orient=chooseRectScanOrientation(open,cellClues);
+   const {realX,realY}=orient;
+   const order=[],orderU=[],orderV=[];
+   for(let u=0;u<n;u++)for(let v=0;v<n;v++){ const i=id(realX(u,v),realY(u,v)); if(open[i]){order.push(i); orderU.push(u); orderV.push(v)} }
    const need=K-totalFlags;
    let placedVarMines=0,nodes=0,exhaustedFlag=true,sol=0;
+   // global remaining-mine lower-bound pruning (new in v017): uncoveredVarCount tracks how many *var* cells are
+   // not yet covered=1/2 on the current search path. If even assigning every one of them as a mine could not
+   // reach `need`, no completion of this path can satisfy the global mine-count constraint, so the whole
+   // subtree is sound to prune. v016 only ever checked the upper bound (`placedVarMines>need`); the lower bound
+   // was completely absent, which let the DFS wander deep into wide unconstrained free-area branches before
+   // discovering at the leaf that too few mines remain. Global and complementary to the existing per-clue
+   // curMine/curUnd over/underflow checks, which only see each clue's own local frontier.
+   let uncoveredVarCount=0; for(const c of order)if(isVar[c])uncoveredVarCount++;
    const OR=new Uint8Array(N), AND=new Uint8Array(N).fill(1);
    function nextUncovered(fromIdx){ for(let k=fromIdx;k<order.length;k++)if(covered[order[k]]===0)return k; return -1 }
-   function markSafe(cell){ covered[cell]=1; const touched=[]; for(const ci of cellClues[cell]){curUnd[ci]--; touched.push(ci)} return touched }
-   function unmarkSafe(cell,touched){ covered[cell]=0; for(const ci of touched)curUnd[ci]++ }
-   function placeRectangle(x0,y0,w,h){
-    const cells=rectMask({minX:x0,maxX:x0+w-1,minY:y0,maxY:y0+h-1});
-    for(const c of cells)covered[c]=2;
-    rectInfo.push({minX:x0,maxX:x0+w-1,minY:y0,maxY:y0+h-1});
+   function markSafe(cell){ covered[cell]=1; if(isVar[cell])uncoveredVarCount--; const touched=[]; for(const ci of cellClues[cell]){curUnd[ci]--; touched.push(ci)} return touched }
+   function unmarkSafe(cell,touched){ covered[cell]=0; if(isVar[cell])uncoveredVarCount++; for(const ci of touched)curUnd[ci]++ }
+   // v017 perf: iterate the rectangle bounds directly instead of materializing a cells[] array on every
+   // placement attempt (rectMask() is still used elsewhere for one-off calls, e.g. mineRect fill, where the
+   // allocation cost doesn't matter). unplaceRectangle re-walks the same bounds (stored on `info.rect`) rather
+   // than replaying a stored cells[] list — same cells touched, same bookkeeping, fewer allocations per node.
+   function placeRectangle(rect){
     const touched=[]; let varMineDelta=0;
-    for(const c of cells)if(isVar[c]){ varMineDelta++; for(const ci of cellClues[c]){curMine[ci]++; curUnd[ci]--; touched.push(ci)} }
-    placedVarMines+=varMineDelta;
-    return{cells,touched,varMineDelta}}
+    for(let y=rect.minY;y<=rect.maxY;y++)for(let x=rect.minX;x<=rect.maxX;x++){
+     const c=id(x,y); covered[c]=2;
+     if(isVar[c]){ varMineDelta++; for(const ci of cellClues[c]){curMine[ci]++; curUnd[ci]--; touched.push(ci)} }
+    }
+    rectInfo.push(rect);
+    placedVarMines+=varMineDelta; uncoveredVarCount-=varMineDelta;
+    return{rect,touched,varMineDelta}}
    function unplaceRectangle(info){
-    for(const c of info.cells)covered[c]=0;
+    const rect=info.rect;
+    for(let y=rect.minY;y<=rect.maxY;y++)for(let x=rect.minX;x<=rect.maxX;x++)covered[id(x,y)]=0;
     rectInfo.pop();
     for(const ci of info.touched){curMine[ci]--; curUnd[ci]++}
-    placedVarMines-=info.varMineDelta}
-   function edgeTouchIllegal(x0,y0,w,h){
+    placedVarMines-=info.varMineDelta; uncoveredVarCount+=info.varMineDelta}
+   function edgeTouchIllegal(rect){
+    const x0=rect.minX,y0=rect.minY,w=rect.maxX-rect.minX+1,h=rect.maxY-rect.minY+1;
     for(let x=x0;x<x0+w;x++){ if(y0-1>=0&&covered[id(x,y0-1)]===2)return true; if(y0+h<n&&covered[id(x,y0+h)]===2)return true }
     for(let y=y0;y<y0+h;y++){ if(x0-1>=0&&covered[id(x0-1,y)]===2)return true; if(x0+w<n&&covered[id(x0+w,y)]===2)return true }
     return false}
-   function clueUnderflowPossible(){ for(let ci=0;ci<clues.length;ci++)if(curMine[ci]+curUnd[ci]<clues[ci].need)return true; return false }
    function clueUnderflowPossibleFast(touched){ for(const ci of touched)if(curMine[ci]+curUnd[ci]<clues[ci].need)return true; return false }
+   function scanBoxToReal(u0,u1,v0,v1){
+    const xs=[realX(u0,v0),realX(u0,v1),realX(u1,v0),realX(u1,v1)],ys=[realY(u0,v0),realY(u0,v1),realY(u1,v0),realY(u1,v1)];
+    return{minX:Math.min(xs[0],xs[1],xs[2],xs[3]),maxX:Math.max(xs[0],xs[1],xs[2],xs[3]),minY:Math.min(ys[0],ys[1],ys[2],ys[3]),maxY:Math.max(ys[0],ys[1],ys[2],ys[3])}}
    // recursive search over rectangle placements; scanFrom is an index into `order` (cells before it are always
    // fully decided on the current path, so resuming from there on backtrack is correct without rescanning).
    function searchRectangleLayouts(scanFrom){
     if(!exhaustedFlag)return;
     if(++nodes>budget){exhaustedFlag=false; return}
     if(placedVarMines>need)return;
+    if(placedVarMines+uncoveredVarCount<need)return; // new in v017: global min-mine-count bound (see above)
     const idx=nextUncovered(scanFrom);
     if(idx===-1){
      if(placedVarMines!==need)return;
@@ -366,32 +414,37 @@ function infer2C(io){
      sol++;
      for(const v of vars){ if(covered[v]===2)OR[v]=1; else AND[v]=0 }
      return}
-    const cell=order[idx],x0=xOf(cell),y0=yOf(cell),isFlag=fixedMine[cell]?1:0;
+    const cell=order[idx],u0=orderU[idx],v0=orderV[idx],isFlag=fixedMine[cell]?1:0;
     if(!isFlag){
      const touched=markSafe(cell);
      if(!clueUnderflowPossibleFast(touched))searchRectangleLayouts(idx+1);
      unmarkSafe(cell,touched);
      if(!exhaustedFlag)return}
-    let hMax=0; for(let y=y0;y<n;y++){const c=id(x0,y); if(!open[c]||covered[c])break; hMax++}
-    let prevW=n-x0;
+    let hMax=0; for(let u=u0;u<n;u++){const c=id(realX(u,v0),realY(u,v0)); if(!open[c]||covered[c])break; hMax++}
+    let prevW=n-v0;
     for(let h=1;h<=hMax;h++){
-     const y1=y0+h-1; let w=0;
-     for(let x=x0;x<n;x++){ let ok=true; for(let y=y0;y<=y1;y++){const c=id(x,y); if(!open[c]||covered[c]){ok=false;break}} if(!ok)break; w++ }
+     const u1=u0+h-1; let w=0;
+     for(let v=v0;v<n;v++){ let ok=true; for(let u=u0;u<=u1;u++){const c=id(realX(u,v),realY(u,v)); if(!open[c]||covered[c]){ok=false;break}} if(!ok)break; w++ }
      const rowMaxW=Math.min(prevW,w); prevW=rowMaxW; if(rowMaxW===0)break;
      for(let ww=1;ww<=rowMaxW;ww++){
       if(!exhaustedFlag)return;
-      if(edgeTouchIllegal(x0,y0,ww,h))continue;
-      const info=placeRectangle(x0,y0,ww,h);
+      const rect=scanBoxToReal(u0,u1,v0,v0+ww-1);
+      if(edgeTouchIllegal(rect)){ continue }
+      const info=placeRectangle(rect);
       let overflow=placedVarMines>need;
       if(!overflow)for(const ci of info.touched)if(curMine[ci]>clues[ci].need){overflow=true;break}
-      if(!overflow&&!clueUnderflowPossible())searchRectangleLayouts(idx+1);
+      // v017: only the clues this placement touched can have newly gone underflow-impossible; every other
+      // clue's underflow status is unchanged from the parent call (already verified there), so rescanning
+      // every clue on every placement (old clueUnderflowPossible()) was wasted work. Same technique already
+      // used on the per-cell markSafe branch above. Also reuses the global min-mine bound.
+      if(!overflow&&placedVarMines+uncoveredVarCount>=need&&!clueUnderflowPossibleFast(info.touched))searchRectangleLayouts(idx+1);
       unplaceRectangle(info);
       if(overflow)break; // placedVarMines / per-clue mine counts are monotonically non-decreasing as ww grows
      }
     }
    }
    searchRectangleLayouts(0);
-   return{exhausted:exhaustedFlag,sol,nodes,OR,AND,candidates:buildRectangleCandidates(open)}}
+   return{exhausted:exhaustedFlag,sol,nodes,OR,AND,candidates:buildRectangleCandidates(open),orientLabel:orient.label}}
 
   // ===================== execution order (conservative) =====================
   const safeA=new Set(),mineA=new Set(); exact(clues.map(c=>({cells:c.vn,need:c.need})),safeA,mineA); if(totalFlags===K)for(const v of vars)safeA.add(v); if(totalFlags+vars.length===K)for(const v of vars)mineA.add(v); for(const j of safeA)if(mineA.has(j))return bad(`contradiction: ${lab(xOf(j),yOf(j))} forced safe and mine`); if(safeA.size||mineA.size)return ret(safeA,mineA,'deduce(number rule): forced by single clue / total count');
@@ -437,30 +490,67 @@ function infer2C(io){
   // general 1-step tiers, before full exhaustive search.
   if(vars.length>24){const r=mergeReturn(deduceAssumptionNumberClosure2C(),'tier general: assumption number-closure 2C contradiction'); if(r)return r}
 
-  // (8) rectangle candidate solver 2C (general, structural — v016). Placed before the assumption existence probe:
-  // both are gated to vars.length>24 and both are tried only after every cheaper general tier above has failed,
-  // but the rectangle solver searches whole rectangle placements instead of single cells, which resolves boards
-  // like this one (and additional test 26) in well under a second, against ~20s for the existence probe's
-  // cell-level bounded search reaching the same board without a verdict. Measured directly: on additional test
-  // 26's board this tier alone reaches the same safe:["D4"] verdict in ~0.5s/3.7M nodes, vs ~21s/40M nodes for the
-  // existence probe. Running it first does not change any result for additional tests 7-26 — tests 7-25 are all
-  // already resolved by tiers strictly earlier in this list, and test 26 produces the identical verdict from this
-  // tier instead. Only boards that defeat both this tier and the existence probe (e.g. additional test 27, which
-  // this tier alone resolves in well under a second once it is reached) fall through past both into Tier B.
+  // (8) rectangle candidate solver 2C (general, structural — v017). Placed before the assumption existence
+  // probe: both are gated to vars.length>24 and both are tried only after every cheaper general tier above has
+  // failed, but the rectangle solver searches whole rectangle placements instead of single cells.
+  //
+  // v017 changes over v016 (additional tests 28-31 — v016 hit `prune nodes: 8,000,001`/`exhausted:false` on all
+  // four, either with some layouts found but search incomplete, or zero layouts found before budget ran out):
+  //  - orientation-aware canonical scan (`chooseRectScanOrientation`): the row-major rectangle-anchor scan that
+  //    guarantees no-double-counting/completeness is still exactly the same algorithm, just run over one of the
+  //    8 relabelings (transpose + independent x/y flips) of the board chosen to visit flag/high-clue-degree
+  //    cells first. v016 always scanned literal top-left-to-bottom-right, which on these boards means a wide
+  //    clue-free "free area" gets explored before the small tightly-constrained cluster is ever reached, paying
+  //    the free area's huge tiling-count combinatorics with no pruning benefit. Sound by construction: any
+  //    dihedral symmetry of a square maps axis-aligned rectangles to axis-aligned rectangles and preserves 4-/
+  //    8-adjacency, so the existing canonical-anchor proof carries over unchanged — only which cells get decided
+  //    first changes, not what counts as a legal layout.
+  //  - new global remaining-mine lower-bound prune (`uncoveredVarCount`): v016 only ever checked the upper bound
+  //    (`placedVarMines>need`); the lower bound (can the still-uncovered var cells possibly supply enough mines
+  //    to reach `need`) was completely absent, letting the DFS wander deep into free-area branches before
+  //    discovering at the leaf that too few mines remained.
+  //  - per-clue underflow check after a rectangle placement now only rescans the clues that placement actually
+  //    touched (`clueUnderflowPossibleFast`) instead of every clue on the board on every placement attempt.
+  //  - placeRectangle/unplaceRectangle walk the rectangle bounds directly instead of materializing a cells[]
+  //    array on every attempt (constant-factor speedup only, no behavior change).
+  //  - staged/adaptive budget: a fixed board gets the cheap 8,000,000-node attempt; only boards where that
+  //    attempt is inconclusive (`exhausted:false`) pay for the next, larger stage. Budget never escalates for
+  //    boards the first stage already finishes (`exhausted:true`, whether sol>0 or sol===0), so easy/typical
+  //    boards see no slowdown from this change at all.
+  //  - richer diagnostics (see below): `rect search mode`, `rect budget`, and an explicit reminder that
+  //    `rect layouts: 0` together with `exhausted: false` means "budget ran out before any legal layout was
+  //    reached", not "no legal layout exists" — only `exhausted:true` lets this tier's layout count (zero or
+  //    not) be trusted as final.
+  //
+  // Verified directly (this session): additional tests 26/27 (where v016's rectangle solver already succeeded)
+  // produce the identical verdict in v017, at the original 8,000,000-node first stage. Additional tests 28 and
+  // 29 now resolve at the original first-stage budget alone (no escalation needed). Additional test 30 needs the
+  // 96,000,000-node third stage. Additional test 31 (a large, mostly clue-free open region spanning 4 of the 8
+  // rows) does not finish even at the 96,000,000-node ceiling — exactly the kind of case the "no UI-freezing
+  // unconditional huge budget" guidance warns about, so this tier deliberately stops escalating there and falls
+  // through to the existing assumption existence probe / Tier B / budget-exceeded fallback, exactly as v016
+  // would for any other unresolved board. It never returns a wrong answer for that board (D6/D7 are never
+  // returned, matching the required regression), it just does not (yet) produce the full A6/B6/C7/C8 verdict.
   if(vars.length>24){
-   const RECT_BUDGET=8000000;
-   const rr=deduceRectangleCandidateSolver2C(RECT_BUDGET);
+   const RECT_BUDGET_STAGES=[8000000,32000000,96000000];
+   let rr=null,stageUsed=0;
+   for(let s=0;s<RECT_BUDGET_STAGES.length;s++){
+    rr=deduceRectangleCandidateSolver2C(RECT_BUDGET_STAGES[s]);
+    stageUsed=RECT_BUDGET_STAGES[s];
+    if(rr.exhausted)break; // either a trustworthy sol (>0 or ===0) or this board just doesn't need more budget
+   }
    if(rr.exhausted&&rr.sol>0){
     const safeR=new Set(),mineR=new Set();
     for(const v of vars){ if(rr.OR[v]===0)safeR.add(v); else if(rr.AND[v]===1)mineR.add(v) }
     for(const j of safeR)if(mineR.has(j))return bad(`contradiction: ${lab(xOf(j),yOf(j))} forced safe and mine`);
     if(safeR.size||mineR.size){
-     log.push(...constraints,'tier structural: rectangle candidate solver 2C',`rect candidates: ${rr.candidates}`,`rect layouts: ${rr.sol}`,`deduce: mine=${mineR.size} safe=${safeR.size}`);
+     log.push(...constraints,'tier structural: rectangle candidate solver 2C',`rect search mode: oriented row-major (${rr.orientLabel})`,`rect candidates: ${rr.candidates}`,`rect budget: ${stageUsed}`,`rect layouts: ${rr.sol}`,`exhausted: true`,`deduce: mine=${mineR.size} safe=${safeR.size}`);
      const safe=[...safeR].map(i=>lab(xOf(i),yOf(i))).sort(),mine=[...mineR].map(i=>lab(xOf(i),yOf(i))).sort();
      return{ok:true,engine:ENGINE_2C_VERSION,mode:'2C',safe,mine,sol:undefined,exhausted:true,checkLines:log};
     }
    } else {
-    log.push(...constraints,'tier structural: rectangle candidate solver 2C',`rect candidates: ${rr.candidates}`,`rect layouts: ${rr.sol}`,`exhausted: ${rr.exhausted}`,`prune nodes: ${rr.nodes}`,'rectangle candidate solver found no guaranteed deduction; deferring to assumption existence probe / full search');
+    const note=(rr.sol===0&&!rr.exhausted)?'rect layouts: 0 here means budget exhausted before any legal layout was reached, NOT proof that no legal layout exists':'rectangle candidate solver found no guaranteed deduction; deferring to assumption existence probe / full search';
+    log.push(...constraints,'tier structural: rectangle candidate solver 2C',`rect search mode: oriented row-major (${rr.orientLabel})`,`rect candidates: ${rr.candidates}`,`rect budget: ${stageUsed}`,`rect layouts: ${rr.sol}`,`exhausted: ${rr.exhausted}`,`prune nodes: ${rr.nodes}`,note);
    }
   }
 
