@@ -15,6 +15,8 @@ function parse(rows){
 const cases = [
   {
     name:'5x5 initial',
+    size:5,
+    mines:10,
     rows:[
       '. ? . . .',
       '3 . ? . .',
@@ -27,6 +29,8 @@ const cases = [
   },
   {
     name:'5x5 after first deductions',
+    size:5,
+    mines:10,
     rows:[
       'F ? . . .',
       '3 F ? . .',
@@ -39,6 +43,8 @@ const cases = [
   },
   {
     name:'5x5 middle',
+    size:5,
+    mines:10,
     rows:[
       'F ? . . .',
       '3 F ? . .',
@@ -51,6 +57,8 @@ const cases = [
   },
   {
     name:'5x5 finish',
+    size:5,
+    mines:10,
     rows:[
       'F ? . . .',
       '3 F ? F 2',
@@ -60,11 +68,27 @@ const cases = [
     ],
     mine:['C1'],
     safe:['D1','E1']
+  },
+  {
+    name:'7x7 first nested contradiction',
+    size:7,
+    mines:20,
+    rows:[
+      '. . . 3 3 F F',
+      '. . . F F 5 .',
+      '. . . ? 4 F .',
+      '. 5 . . 3 . .',
+      'F F ? 2 F 4 3',
+      '3 4 2 2 ? F F',
+      'F ? F 1 2 F 3'
+    ],
+    mine:['C1','C3'],
+    safe:['C2']
   }
 ];
 
 for(const tc of cases){
-  const out = infer2F({mode:'2F', size:5, mines:10, board:parse(tc.rows)});
+  const out = infer2F({mode:'2F', size:tc.size, mines:tc.mines, board:parse(tc.rows)});
   assert.equal(out.ok, true, tc.name + ': solver returned error');
   assert.deepStrictEqual(out.mine, tc.mine, tc.name + ': mine mismatch');
   assert.deepStrictEqual(out.safe, tc.safe, tc.name + ': safe mismatch');
