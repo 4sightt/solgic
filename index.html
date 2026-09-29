@@ -48,6 +48,7 @@ End memo.
   .cell.flag::after{content:"🚩"; position:absolute; font-size:36px}
   .cell.markSafe{outline:3px solid rgba(34,197,94,.85); background:rgba(34,197,94,.12)}
   .cell.markMine{outline:3px solid rgba(239,68,68,.85); background:rgba(239,68,68,.12)}
+  .cell.flowerShade{background:rgba(148,163,184,.16)}
   .val{font-weight:800; letter-spacing:.3px; line-height:1}.val.big{font-size:36px}.val.q{color:#eab308}.val.n{color:var(--text)}
   .wgrid{width:100%; height:100%; display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; padding:8px; gap:2px; place-items:center}
   .witem{font-weight:800; font-size:28px; line-height:1}.witem.q{color:#eab308}.witem.center{grid-column:1/span 2; grid-row:1/span 2; font-size:38px}.witem.bottomCenter{grid-column:1/span 2; grid-row:2}
@@ -81,6 +82,7 @@ End memo.
             <option value="w">W</option>
             <option value="2g">2G</option>
             <option value="2c">2C</option>
+            <option value="2f">2F</option>
           </select>
         </label>
         <label style="display:flex; align-items:center; gap:8px; font-size:17px; color:var(--muted)">
@@ -125,7 +127,7 @@ End memo.
         </div>
         <div id="stateBox" class="sideBody"></div>
         <div class="hint">
-          Normal/Q/2G: <span class="kbd">L</span> click cycles <b>empty → ? → 0 → 15 → empty</b>. Keys <span class="kbd">0-9</span> set number. <span class="kbd">R</span> toggles flag.
+          Normal/Q/2G/2C/2F: <span class="kbd">L</span> click cycles <b>empty → ? → 0 → 15 → empty</b>. Keys <span class="kbd">0-9</span> set number. <span class="kbd">R</span> toggles flag.
           <br/>W: <span class="kbd">L</span> selects slot1. Keys <span class="kbd">0-8</span>/<span class="kbd">?</span> fill and advance. <span class="kbd">R</span> toggles flag.
         </div>
       </div>
@@ -136,6 +138,7 @@ End memo.
 <script src="engine-2g.js"></script>
 <script src="engine-q.js"></script>
 <script src="engine-2c.js"></script>
+<script src="engine-2f.js"></script>
 <script>
 (() => {
   const boardEl = document.getElementById('board');
@@ -161,7 +164,8 @@ End memo.
     q:{label:'Q', ioMode:'Q'},
     w:{label:'W', ioMode:'W'},
     '2g':{label:'2G', ioMode:'2G'},
-    '2c':{label:'2C', ioMode:'2C'}
+    '2c':{label:'2C', ioMode:'2C'},
+    '2f':{label:'2F', ioMode:'2F'}
   };
 
   const STATE = {
@@ -189,6 +193,7 @@ End memo.
     if (typeof ENGINE_2G_VERSION !== 'undefined') engines.push(ENGINE_2G_VERSION);
     if (typeof ENGINE_Q_VERSION !== 'undefined') engines.push(ENGINE_Q_VERSION);
     if (typeof ENGINE_2C_VERSION !== 'undefined') engines.push(ENGINE_2C_VERSION);
+    if (typeof ENGINE_2F_VERSION !== 'undefined') engines.push(ENGINE_2F_VERSION);
     fileInfo.textContent = `Engine: ${engines.length ? engines.join(' | ') : '—'} | App: ${appVer}`;
   }
 
@@ -363,6 +368,7 @@ End memo.
         const mark = STATE.marks[y][x];
         if(mark === 'safe') cell.classList.add('markSafe');
         else if(mark === 'mine') cell.classList.add('markMine');
+        if(STATE.mode === '2f' && ((x + y) & 1) === 1) cell.classList.add('flowerShade');
         cell.dataset.x = x;
         cell.dataset.y = y;
 
@@ -569,6 +575,7 @@ End memo.
       if(m === 'Q') setMode('q');
       else if(m === '2G') setMode('2g');
       else if(m === '2C') setMode('2c');
+      else if(m === '2F') setMode('2f');
       else setMode('normal');
       loadNormalBoard(obj.board,n);
     }
@@ -708,6 +715,9 @@ End memo.
     }else if(STATE.mode === '2c'){
       if(typeof infer2C !== 'function') out = {ok:false, checkLines:['engine-2c.js not loaded'], safe:[], mine:[], sol:0};
       else out = infer2C(io);
+    }else if(STATE.mode === '2f'){
+      if(typeof infer2F !== 'function') out = {ok:false, checkLines:['engine-2f.js not loaded'], safe:[], mine:[], sol:0};
+      else out = infer2F(io);
     }else{
       out = {note:'(no engine)', safe:[], mine:[]};
     }
