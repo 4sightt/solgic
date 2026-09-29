@@ -1,5 +1,5 @@
 'use strict';
-const ENGINE_2F_VERSION = 'engine-2f v002';
+const ENGINE_2F_VERSION = 'engine-2f v003';
 
 function infer2F(io){
   const bad = msg => ({ok:false, engine:ENGINE_2F_VERSION, mode:'2F', checkLines:[ENGINE_2F_VERSION,msg], mine:[], safe:[], proofs:{}, exhausted:true});
@@ -178,31 +178,58 @@ function infer2F(io){
       return {a,trace,contradiction};
     }
 
-    const MAX_NESTED_SPLIT_DEPTH=1; // one extra case split inside a candidate assumption
-    const MAX_PROOF_PROBES=12000;
+    const MAX_PROOF_PROBES=60000;
     let proofProbes=0, budgetExhausted=false;
 
-    function proveContradiction(initial, depth, seedTrace){
-      if(proofProbes++ >= MAX_PROOF_PROBES){budgetExhausted=true; return {proved:false};}
-      const c=closure(initial,seedTrace);
-      if(c.contradiction){
-        return {proved:true, proof:{kind:'direct', contradiction:c.contradiction, steps:c.trace}};
-      }
-      if(depth<=0) return {proved:false};
+    function failedLiteralClosure(initial, seedTrace){
+      let c=closure(initial,seedTrace);
+      if(c.contradiction) return {proved:true, proof:{kind:'direct', contradiction:c.contradiction, steps:c.trace}};
 
-      const unresolved=vars.filter(i=>c.a[i]===-1);
-      for(const pivot of unresolved){
-        if(budgetExhausted) break;
-        const mineSeed=new Int8Array(c.a); mineSeed[pivot]=1;
-        const pm=proveContradiction(mineSeed,depth-1,c.trace.concat(`CASE ${lab(pivot)} = mine`));
-        if(!pm.proved) continue;
-        const safeSeed=new Int8Array(c.a); safeSeed[pivot]=0;
-        const ps=proveContradiction(safeSeed,depth-1,c.trace.concat(`CASE ${lab(pivot)} = safe`));
-        if(ps.proved){
-          return {proved:true, proof:{kind:'split', pivot:lab(pivot), mine:pm.proof, safe:ps.proof}};
+      while(!budgetExhausted){
+        let advanced=false;
+        const unresolved=vars.filter(i=>c.a[i]===-1);
+
+        for(const pivot of unresolved){
+          if(proofProbes + 2 > MAX_PROOF_PROBES){ budgetExhausted=true; break; }
+          proofProbes += 2;
+
+          const mineSeed=new Int8Array(c.a); mineSeed[pivot]=1;
+          const mineTry=closure(mineSeed,c.trace.concat(`TEST ${lab(pivot)} = mine`));
+
+          const safeSeed=new Int8Array(c.a); safeSeed[pivot]=0;
+          const safeTry=closure(safeSeed,c.trace.concat(`TEST ${lab(pivot)} = safe`));
+
+          if(mineTry.contradiction && safeTry.contradiction){
+            return {
+              proved:true,
+              proof:{
+                kind:'failed-literal-split',
+                pivot:lab(pivot),
+                mine:{contradiction:mineTry.contradiction,steps:mineTry.trace},
+                safe:{contradiction:safeTry.contradiction,steps:safeTry.trace}
+              }
+            };
+          }
+
+          if(mineTry.contradiction !== safeTry.contradiction){
+            const forced = mineTry.contradiction ? 0 : 1;
+            const rejected = mineTry.contradiction ? mineTry : safeTry;
+            const next=new Int8Array(c.a);
+            next[pivot]=forced;
+            const note=`FAILED-LITERAL ${lab(pivot)}: ${forced===0?'mine':'safe'} assumption contradicts (${rejected.contradiction}); commit ${forced===1?'mine':'safe'}`;
+            c=closure(next,c.trace.concat(note));
+            if(c.contradiction){
+              return {proved:true, proof:{kind:'failed-literal-chain', contradiction:c.contradiction, steps:c.trace}};
+            }
+            advanced=true;
+            break;
+          }
         }
+
+        if(!advanced) break;
       }
-      return {proved:false};
+
+      return {proved:false, state:c.a, steps:c.trace};
     }
 
     const start=closure(base,[]);
@@ -221,19 +248,19 @@ function infer2F(io){
       if(start.a[i]!==-1) continue;
 
       const mineSeed=new Int8Array(base); mineSeed[i]=1;
-      const mineTry=proveContradiction(mineSeed,MAX_NESTED_SPLIT_DEPTH,[`ASSUME ${lab(i)} = mine`]);
+      const mineTry=failedLiteralClosure(mineSeed,[`ASSUME ${lab(i)} = mine`]);
       const safeSeed=new Int8Array(base); safeSeed[i]=0;
-      const safeTry=proveContradiction(safeSeed,MAX_NESTED_SPLIT_DEPTH,[`ASSUME ${lab(i)} = safe`]);
+      const safeTry=failedLiteralClosure(safeSeed,[`ASSUME ${lab(i)} = safe`]);
 
       if(mineTry.proved && safeTry.proved){
         return bad(`input contradiction: both ${lab(i)}=mine and ${lab(i)}=safe can be refuted`);
       }
       if(mineTry.proved){
         safe.add(i);
-        proofs[lab(i)]={type:'nested-contradiction', conclusion:'safe', assumption:'mine', proof:mineTry.proof};
+        proofs[lab(i)]={type:'failed-literal-contradiction', conclusion:'safe', assumption:'mine', proof:mineTry.proof};
       } else if(safeTry.proved){
         mine.add(i);
-        proofs[lab(i)]={type:'nested-contradiction', conclusion:'mine', assumption:'safe', proof:safeTry.proof};
+        proofs[lab(i)]={type:'failed-literal-contradiction', conclusion:'mine', assumption:'safe', proof:safeTry.proof};
       }
     }
 
@@ -245,7 +272,7 @@ function infer2F(io){
       ENGINE_2F_VERSION,
       '2F: checkerboard coloring, A1 uncolored / B1 colored',
       '2F: a mine on a colored cell has exactly one orthogonal mine',
-      'proof engine: fixed-point propagation + exact-sum subset algebra + nested contradiction (one extra case split)',
+      'proof engine: fixed-point propagation + exact-sum subset algebra + iterative failed-literal propagation inside each assumption',
       'each candidate is proved from the original board; same-call outputs are not reused',
       'no brute-force completion enumeration',
       `proof probes=${proofProbes}/${MAX_PROOF_PROBES}${budgetExhausted?' (budget reached)':''}`,
