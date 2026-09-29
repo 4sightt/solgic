@@ -20,6 +20,13 @@ Quad는 `solgic3_quad_solver_source.md`, Connected/2C는 `solgic3_2c_solver_sour
   새로 만들 Connected/2C 모드 전용 추론 엔진.  
   숫자 지뢰찾기 규칙 + 지뢰 그룹 직사각형성 + 그룹 간 대각 연결성 + 총 지뢰 수 제약으로 확정 안전/지뢰만 반환한다.
 
+- `engine-2f.js`  
+  2F/Flower 모드 전용 추론 엔진.  
+  체스판 색칠 + 색칠된 지뢰의 상하좌우 지뢰 정확히 1개 규칙을 사용한다. 현재 v001은 brute-force 완성해 열거가 아니라 논리 전파·제약 차분·단일 가정 모순으로 확정칸을 찾는다.
+
+- `source/solgic3_2f_solver_source.md`  
+  2F 규칙, 현재 추론 범위, 회귀 케이스와 향후 일반화 원칙을 기록한다.
+
 - `solgic3_quad_solver_source.md`  
   Quad 규칙, `?` 칸 정의, 좌표 규칙, 엔진 설계, 테스트 케이스를 담은 상세 소스 문서다.
 
