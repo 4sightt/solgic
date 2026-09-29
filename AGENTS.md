@@ -22,7 +22,7 @@ Quad는 `solgic3_quad_solver_source.md`, Connected/2C는 `solgic3_2c_solver_sour
 
 - `engine-2f.js`  
   2F/Flower 모드 전용 추론 엔진.  
-  체스판 색칠 + 색칠된 지뢰의 상하좌우 지뢰 정확히 1개 규칙을 사용한다. 현재 v002는 brute-force 완성해 열거가 아니라 논리 전파·제약 차분·후보 가정 내부의 1회 추가 case split으로 확정칸을 찾는다.
+  체스판 색칠 + 색칠된 지뢰의 상하좌우 지뢰 정확히 1개 규칙을 사용한다. 현재 v003은 brute-force 완성해 열거가 아니라 논리 전파·제약 차분·가정 세계 내부의 반복 failed-literal 전파로 확정칸을 찾는다.
 
 - `source/solgic3_2f_solver_source.md`  
   2F 규칙, 현재 추론 범위, 회귀 케이스와 향후 일반화 원칙을 기록한다.
