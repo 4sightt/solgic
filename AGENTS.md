@@ -1,5 +1,7 @@
 # Solgic3 Project Instructions
 
+새 채팅에서 작업을 이어갈 때는 먼저 `CURRENT_CONTEXT.md`를 읽고 현재 기준점을 복원한다. Pages 설정이나 과거 단계로 되돌아가지 않는다.
+
 이 파일은 다음 채팅에서 프로젝트 구조를 빠르게 파악하기 위한 짧은 지침이다.  
 세부 게임 규칙과 엔진 설계는 모드별 소스 문서를 기준으로 한다.  
 Quad는 `solgic3_quad_solver_source.md`, Connected/2C는 `solgic3_2c_solver_source.md`를 참조한다.
