@@ -84,6 +84,23 @@ const cases = [
     ],
     mine:['C1','C3'],
     safe:['C2']
+  },
+  {
+    name:'8x8 iterative failed-literal chain',
+    size:8,
+    mines:26,
+    rows:[
+      '. . . . 2 . . .',
+      '. . . 4 . . . 3',
+      '. . . . . . . .',
+      '. . . 5 . . . 3',
+      '. . . ? . 4 . .',
+      '. . . 3 2 F . .',
+      '. . . . 3 ? 5 F',
+      '. . . . 2 . . .'
+    ],
+    mine:['D3','G1','G3'],
+    safe:['G2']
   }
 ];
 
