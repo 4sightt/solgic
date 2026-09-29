@@ -1,5 +1,5 @@
 'use strict';
-const ENGINE_2F_VERSION = 'engine-2f v001';
+const ENGINE_2F_VERSION = 'engine-2f v002';
 
 function infer2F(io){
   const bad = msg => ({ok:false, engine:ENGINE_2F_VERSION, mode:'2F', checkLines:[ENGINE_2F_VERSION,msg], mine:[], safe:[], proofs:{}, exhausted:true});
@@ -17,7 +17,7 @@ function infer2F(io){
     const neigh=(i,dirs)=>{const x=xOf(i),y=yOf(i),a=[]; for(const [dx,dy] of dirs){const xx=x+dx,yy=y+dy;if(xx>=0&&yy>=0&&xx<n&&yy<n)a.push(id(xx,yy));} return a;};
     const N8=Array.from({length:N},(_,i)=>neigh(i,D8));
     const N4=Array.from({length:N},(_,i)=>neigh(i,D4));
-    const colored=i=>((xOf(i)+yOf(i))&1)===1; // 2F board: A1 uncolored, B1 colored
+    const colored=i=>((xOf(i)+yOf(i))&1)===1; // A1 uncolored, B1 colored
 
     function norm(c){
       if(c==null) return {t:'e'};
@@ -104,7 +104,9 @@ function infer2F(io){
         {
           let fm=0; const cells=[];
           for(let i=0;i<N;i++){if(a[i]===1)fm++; else if(a[i]===-1)cells.push(i);}
-          cons.push({cells,need:K-fm,why:`total mines=${K}`});
+          const need=K-fm;
+          if(need<0||need>cells.length){contradiction=`total mines=${K} cannot be satisfied (fixed=${fm}, unknown=${cells.length})`;break;}
+          cons.push({cells,need,why:`total mines=${K}`});
         }
 
         for(let i=0;i<N;i++){
@@ -176,6 +178,33 @@ function infer2F(io){
       return {a,trace,contradiction};
     }
 
+    const MAX_NESTED_SPLIT_DEPTH=1; // one extra case split inside a candidate assumption
+    const MAX_PROOF_PROBES=12000;
+    let proofProbes=0, budgetExhausted=false;
+
+    function proveContradiction(initial, depth, seedTrace){
+      if(proofProbes++ >= MAX_PROOF_PROBES){budgetExhausted=true; return {proved:false};}
+      const c=closure(initial,seedTrace);
+      if(c.contradiction){
+        return {proved:true, proof:{kind:'direct', contradiction:c.contradiction, steps:c.trace}};
+      }
+      if(depth<=0) return {proved:false};
+
+      const unresolved=vars.filter(i=>c.a[i]===-1);
+      for(const pivot of unresolved){
+        if(budgetExhausted) break;
+        const mineSeed=new Int8Array(c.a); mineSeed[pivot]=1;
+        const pm=proveContradiction(mineSeed,depth-1,c.trace.concat(`CASE ${lab(pivot)} = mine`));
+        if(!pm.proved) continue;
+        const safeSeed=new Int8Array(c.a); safeSeed[pivot]=0;
+        const ps=proveContradiction(safeSeed,depth-1,c.trace.concat(`CASE ${lab(pivot)} = safe`));
+        if(ps.proved){
+          return {proved:true, proof:{kind:'split', pivot:lab(pivot), mine:pm.proof, safe:ps.proof}};
+        }
+      }
+      return {proved:false};
+    }
+
     const start=closure(base,[]);
     if(start.contradiction) return bad(`contradiction: ${start.contradiction}`);
 
@@ -190,17 +219,21 @@ function infer2F(io){
 
     for(const i of vars){
       if(start.a[i]!==-1) continue;
-      const mineSeed=new Int8Array(base); mineSeed[i]=1;
-      const mineTry=closure(mineSeed,[`ASSUME ${lab(i)} = mine`]);
-      const safeSeed=new Int8Array(base); safeSeed[i]=0;
-      const safeTry=closure(safeSeed,[`ASSUME ${lab(i)} = safe`]);
 
-      if(mineTry.contradiction && !safeTry.contradiction){
+      const mineSeed=new Int8Array(base); mineSeed[i]=1;
+      const mineTry=proveContradiction(mineSeed,MAX_NESTED_SPLIT_DEPTH,[`ASSUME ${lab(i)} = mine`]);
+      const safeSeed=new Int8Array(base); safeSeed[i]=0;
+      const safeTry=proveContradiction(safeSeed,MAX_NESTED_SPLIT_DEPTH,[`ASSUME ${lab(i)} = safe`]);
+
+      if(mineTry.proved && safeTry.proved){
+        return bad(`input contradiction: both ${lab(i)}=mine and ${lab(i)}=safe can be refuted`);
+      }
+      if(mineTry.proved){
         safe.add(i);
-        proofs[lab(i)]={type:'contradiction', conclusion:'safe', assumption:'mine', contradiction:mineTry.contradiction, steps:mineTry.trace};
-      } else if(safeTry.contradiction && !mineTry.contradiction){
+        proofs[lab(i)]={type:'nested-contradiction', conclusion:'safe', assumption:'mine', proof:mineTry.proof};
+      } else if(safeTry.proved){
         mine.add(i);
-        proofs[lab(i)]={type:'contradiction', conclusion:'mine', assumption:'safe', contradiction:safeTry.contradiction, steps:safeTry.trace};
+        proofs[lab(i)]={type:'nested-contradiction', conclusion:'mine', assumption:'safe', proof:safeTry.proof};
       }
     }
 
@@ -212,12 +245,14 @@ function infer2F(io){
       ENGINE_2F_VERSION,
       '2F: checkerboard coloring, A1 uncolored / B1 colored',
       '2F: a mine on a colored cell has exactly one orthogonal mine',
-      'proof engine: fixed-point propagation + exact-sum subset algebra + single-assumption contradiction',
+      'proof engine: fixed-point propagation + exact-sum subset algebra + nested contradiction (one extra case split)',
+      'each candidate is proved from the original board; same-call outputs are not reused',
       'no brute-force completion enumeration',
+      `proof probes=${proofProbes}/${MAX_PROOF_PROBES}${budgetExhausted?' (budget reached)':''}`,
       `deduce: mine=${mineLabels.length} safe=${safeLabels.length}`
     ];
 
-    return {ok:true,engine:ENGINE_2F_VERSION,mode:'2F',mine:mineLabels,safe:safeLabels,proofs,exhausted:true,checkLines};
+    return {ok:true,engine:ENGINE_2F_VERSION,mode:'2F',mine:mineLabels,safe:safeLabels,proofs,exhausted:!budgetExhausted,checkLines};
   }catch(e){
     return bad('error: '+(e&&e.message?e.message:String(e)));
   }
