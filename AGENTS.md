@@ -48,3 +48,8 @@ Quad는 `solgic3_quad_solver_source.md`, Connected/2C는 `solgic3_2c_solver_sour
 - 현재 진행 중인 작업이 있으면 `CURRENT_CONTEXT.md` 다음으로 `handoff/README.md`와 관련 `CURRENT_*.md` 문서를 읽는다.
 - 작업을 마친 에이전트는 해당 handoff 문서의 작업 결과를 갱신한다.
 
+## Experiments
+
+- Solgic의 모델/mode 사용량·작업 효율·재작업 비용 데이터는 `experiments/model/`에서 관리한다.
+- `experiments/model/model_experiment_log.md`가 Solgic 모델 실험의 정본이다.
+- 외부 `docs` 저장소의 Solgic 실험 로그는 과거 snapshot으로만 취급한다.
