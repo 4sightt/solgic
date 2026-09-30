@@ -70,22 +70,5 @@ function inferQ(io){
     return{ok:true,engine:ENGINE_Q_VERSION,checkLines:log,mine,safe,sol:sol<=BigInt(Number.MAX_SAFE_INTEGER)?Number(sol):sol.toString(),exhausted:true};
   }catch(e){return bad('error: '+(e&&e.message?e.message:String(e)));}
 }
-function installQuadEngineInfoPatch(){
-  if(typeof window==='undefined'||typeof document==='undefined')return;
-  function patch(){
-    const el=document.getElementById('fileInfo'); if(!el)return;
-    const modeSel=document.getElementById('modeSel'), mode=modeSel?modeSel.value:'';
-    const loaded=[]; if(typeof window.ENGINE_2G_VERSION!=='undefined')loaded.push(window.ENGINE_2G_VERSION); if(typeof window.ENGINE_Q_VERSION!=='undefined')loaded.push(window.ENGINE_Q_VERSION); if(typeof window.ENGINE_2C_VERSION!=='undefined')loaded.push(window.ENGINE_2C_VERSION); if(typeof window.ENGINE_2F_VERSION!=='undefined')loaded.push(window.ENGINE_2F_VERSION);
-    let active='—'; if(mode==='q')active=window.ENGINE_Q_VERSION||'engine-q.js not loaded'; else if(mode==='2g')active=window.ENGINE_2G_VERSION||'engine-2g.js not loaded'; else if(mode==='2c')active=window.ENGINE_2C_VERSION||'engine-2c.js not loaded'; else if(mode==='2f')active=window.ENGINE_2F_VERSION||'engine-2f.js not loaded'; else if(mode==='w')active='no W engine'; else active='no Normal engine';
-    const next=`Active Engine: ${active} | Loaded: ${loaded.length?loaded.join(' | '):'—'} | App: ${document.title||'Solgic3'}`;
-    if(el.textContent!==next)el.textContent=next;
-  }
-  function bind(){
-    const el=document.getElementById('fileInfo'), modeSel=document.getElementById('modeSel'); if(!el)return false;
-    let busy=false; new MutationObserver(()=>{if(busy)return; busy=true; setTimeout(()=>{patch(); busy=false;},0);}).observe(el,{childList:true,characterData:true,subtree:true});
-    if(modeSel)modeSel.addEventListener('change',()=>setTimeout(patch,0)); patch(); return true;
-  }
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>{bind(); setTimeout(patch,0);}); else if(!bind())setTimeout(()=>{bind(); setTimeout(patch,0);},0);
-}
-if(typeof window!=='undefined'){window.ENGINE_Q_VERSION=ENGINE_Q_VERSION; window.inferQ=inferQ; installQuadEngineInfoPatch();}
+if(typeof window!=='undefined'){window.ENGINE_Q_VERSION=ENGINE_Q_VERSION; window.inferQ=inferQ;}
 if(typeof module!=='undefined'&&module.exports)module.exports={ENGINE_Q_VERSION,inferQ};

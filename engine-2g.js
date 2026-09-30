@@ -1166,3 +1166,5 @@ function infer2G(io){
         (assumeSafe||assumeMine ? ` (assumption: +${assumeSafe}safe +${assumeMine}mine)` : ''));
       return {ok:true,checkLines,mine,safe,sol};
 }
+if(typeof window!=='undefined'){window.ENGINE_2G_VERSION=ENGINE_2G_VERSION; window.infer2G=infer2G;}
+if(typeof module!=='undefined'&&module.exports)module.exports={ENGINE_2G_VERSION,infer2G};
