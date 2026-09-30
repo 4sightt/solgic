@@ -176,7 +176,10 @@ End memo.
     w:[],
     marks:[],
     sel:{x:null,y:null},
-    last:null,
+    lastAction:null,
+    lastInference:null,
+    inferenceBoard:null,
+    inferenceMines:null,
     err:null,
     orderActive:false,
     order:[]
@@ -187,14 +190,15 @@ End memo.
   function mkWCell(){ return {flag:false, slots:[{kind:'empty'},{kind:'empty'},{kind:'empty'},{kind:'empty'}], focus:0}; }
   function labelOf(x,y){ return String.fromCharCode(65+x) + String(y+1); }
 
+  function activeEngine(){
+    if(STATE.mode === 'q') return typeof inferQ === 'function' ? ENGINE_Q_VERSION : 'engine-q.js not loaded';
+    if(STATE.mode === '2g') return typeof infer2G === 'function' ? ENGINE_2G_VERSION : 'engine-2g.js not loaded';
+    if(STATE.mode === '2c') return typeof infer2C === 'function' ? ENGINE_2C_VERSION : 'engine-2c.js not loaded';
+    if(STATE.mode === '2f') return typeof infer2F === 'function' ? ENGINE_2F_VERSION : 'engine-2f.js not loaded';
+    return 'none';
+  }
   function updateEngineInfo(){
-    const appVer = document.title || 'Solgic3';
-    const engines = [];
-    if (typeof ENGINE_2G_VERSION !== 'undefined') engines.push(ENGINE_2G_VERSION);
-    if (typeof ENGINE_Q_VERSION !== 'undefined') engines.push(ENGINE_Q_VERSION);
-    if (typeof ENGINE_2C_VERSION !== 'undefined') engines.push(ENGINE_2C_VERSION);
-    if (typeof ENGINE_2F_VERSION !== 'undefined') engines.push(ENGINE_2F_VERSION);
-    fileInfo.textContent = `Engine: ${engines.length ? engines.join(' | ') : '—'} | App: ${appVer}`;
+    fileInfo.textContent = `Active Engine: ${activeEngine()} | App: ${document.title || 'Solgic3'}`;
   }
 
   function initBoards(n){
@@ -205,7 +209,10 @@ End memo.
     STATE.order = Array.from({length:n}, () => Array.from({length:n}, () => null));
     STATE.orderActive = false;
     STATE.sel = {x:null,y:null};
-    STATE.last = null;
+    STATE.lastAction = null;
+    STATE.lastInference = null;
+    STATE.inferenceBoard = null;
+    STATE.inferenceMines = null;
     STATE.err = null;
     const cap = n*n;
     STATE.mines = clamp(Math.trunc(+STATE.mines || 0), 0, cap);
@@ -218,29 +225,43 @@ End memo.
   }
   function clearMarkAt(x,y){ if(STATE.marks[y]) STATE.marks[y][x] = null; }
 
-  function isCellEmptyForOrder(x,y){
-    if(STATE.mode === 'w'){
-      const c = STATE.w[y][x];
-      return !c.flag && c.slots.every(s => s.kind === 'empty');
-    }
-    return STATE.normal[y][x].kind === 'empty';
-  }
   function nextOrder(){
     let m = 0;
     for(const row of STATE.order) for(const v of row) if(typeof v === 'number' && v > m) m = v;
     return m + 1;
   }
+  function renumberChanges(){
+    const changed = [];
+    for(let y=0;y<STATE.n;y++) for(let x=0;x<STATE.n;x++) if(STATE.order[y][x] != null) changed.push({x,y,order:STATE.order[y][x]});
+    changed.sort((a,b) => a.order-b.order);
+    changed.forEach((item,i) => { STATE.order[item.y][item.x] = i+1; });
+  }
   function touchOrder(x,y){
-    if(!STATE.orderActive){ STATE.order[y][x] = null; return; }
-    if(isCellEmptyForOrder(x,y)) STATE.order[y][x] = null;
+    if(!STATE.orderActive) return;
+    const current = boardToken(buildIO().board[y][x]);
+    if(current === STATE.inferenceBoard[y][x]){
+      STATE.order[y][x] = null;
+      renumberChanges();
+    }
     else if(STATE.order[y][x] == null) STATE.order[y][x] = nextOrder();
   }
 
   function setMode(m){
-    STATE.mode = MODE_DEFS[m] ? m : 'normal';
+    const next = MODE_DEFS[m] ? m : 'normal';
+    if(next !== STATE.mode){
+      STATE.lastAction = null;
+      STATE.lastInference = null;
+      STATE.inferenceBoard = null;
+      STATE.inferenceMines = null;
+      STATE.orderActive = false;
+      STATE.err = null;
+      for(const row of STATE.order) row.fill(null);
+    }
+    STATE.mode = next;
     modeSel.value = STATE.mode;
     modePill.textContent = 'Mode: ' + MODE_DEFS[STATE.mode].label;
     clearMarks();
+    updateEngineInfo();
     render();
     dump();
   }
@@ -254,20 +275,21 @@ End memo.
   }
 
   function toggleFlag(x,y){
+    STATE.err = null;
     if(STATE.mode === 'w'){
       const c = STATE.w[y][x];
       c.flag = !c.flag;
       c.slots = [{kind:'empty'},{kind:'empty'},{kind:'empty'},{kind:'empty'}];
       c.focus = 0;
-      STATE.last = {x,y,value:c.flag ? 'flag' : 'unflag'};
+      STATE.lastAction = {x,y,value:c.flag ? 'flag' : 'unflag'};
     }else{
       const c = STATE.normal[y][x];
       if(c.kind === 'flag'){
         STATE.normal[y][x] = {kind:'empty'};
-        STATE.last = {x,y,value:'empty'};
+        STATE.lastAction = {x,y,value:'empty'};
       }else{
         STATE.normal[y][x] = {kind:'flag'};
-        STATE.last = {x,y,value:'flag'};
+        STATE.lastAction = {x,y,value:'flag'};
       }
     }
     touchOrder(x,y);
@@ -278,20 +300,21 @@ End memo.
   function normalLeftClick(x,y){
     const c = STATE.normal[y][x];
     if(c.kind === 'flag') return;
+    STATE.err = null;
     if(c.kind === 'empty'){
       STATE.normal[y][x] = {kind:'q'};
-      STATE.last = {x,y,value:'?'};
+      STATE.lastAction = {x,y,value:'?'};
     }else if(c.kind === 'q'){
       STATE.normal[y][x] = {kind:'num', v:0};
-      STATE.last = {x,y,value:0};
+      STATE.lastAction = {x,y,value:0};
     }else if(c.kind === 'num'){
       const nv = c.v >= 15 ? null : c.v + 1;
       if(nv == null){
         STATE.normal[y][x] = {kind:'empty'};
-        STATE.last = {x,y,value:'empty'};
+        STATE.lastAction = {x,y,value:'empty'};
       }else{
         STATE.normal[y][x] = {kind:'num', v:nv};
-        STATE.last = {x,y,value:nv};
+        STATE.lastAction = {x,y,value:nv};
       }
     }
     touchOrder(x,y);
@@ -300,17 +323,19 @@ End memo.
   function setNormalByKey(x,y,digit){
     const c = STATE.normal[y][x];
     if(c.kind === 'flag') return;
+    STATE.err = null;
     STATE.normal[y][x] = {kind:'num', v:digit};
-    STATE.last = {x,y,value:digit,via:'key'};
+    STATE.lastAction = {x,y,value:digit,via:'key'};
     touchOrder(x,y);
   }
 
   function setWSlotAndAdvance(x,y, kind, v){
     const c = STATE.w[y][x];
     if(c.flag) return;
+    STATE.err = null;
     const i = clamp(c.focus|0,0,3);
     c.slots[i] = kind === 'q' ? {kind:'q'} : {kind:'num', v:v|0};
-    STATE.last = {x,y,slot:i+1,value:kind === 'q' ? '?' : (v|0)};
+    STATE.lastAction = {x,y,slot:i+1,value:kind === 'q' ? '?' : (v|0)};
     c.focus = (i + 1) % 4;
     touchOrder(x,y);
   }
@@ -330,7 +355,7 @@ End memo.
     if(e.button === 0){
       if(STATE.mode === 'w'){
         STATE.w[y][x].focus = 0;
-        STATE.last = {x,y,value:STATE.w[y][x].flag ? 'select(flagged)' : 'select(slot1)'};
+        STATE.lastAction = {x,y,value:STATE.w[y][x].flag ? 'select(flagged)' : 'select(slot1)'};
       }else{
         normalLeftClick(x,y);
       }
@@ -414,7 +439,11 @@ End memo.
     if(STATE.sel.x == null) selInfo.textContent = 'No selection';
     else if(STATE.mode === 'w') selInfo.textContent = `Selected: (${STATE.sel.x},${STATE.sel.y}) slot=${STATE.w[STATE.sel.y][STATE.sel.x].focus+1}`;
     else selInfo.textContent = `Selected: (${STATE.sel.x},${STATE.sel.y})`;
-    lastInfo.textContent = STATE.last ? 'last: ' + JSON.stringify(STATE.last) : '—';
+    if(STATE.err) lastInfo.textContent = STATE.err;
+    else if(STATE.lastInference){
+      const out = STATE.lastInference;
+      lastInfo.textContent = `Inference: ${out.ok === false ? 'ERROR' : out.ok === true ? 'OK' : 'NO ENGINE'} · mine ${(out.mine || []).length} · safe ${(out.safe || []).length}`;
+    }else lastInfo.textContent = STATE.lastAction ? 'last: ' + JSON.stringify(STATE.lastAction) : '—';
     requestAnimationFrame(placeInferBtn);
   }
 
@@ -488,26 +517,18 @@ End memo.
     const txt = JSON.stringify(buildIO());
     try{
       await navigator.clipboard.writeText(txt);
-      STATE.last = {copy:'ok'};
     }catch(_e){
       prompt('Copy JSON', txt);
-      STATE.last = {copy:'prompt'};
     }
-    dump();
   }
 
   async function copyStateDump(){
-    const io = buildIO();
-    delete io.board;
-    const txt = [selInfo.textContent, fileInfo.textContent, lastInfo.textContent, '', 'IO:', JSON.stringify(io), '', 'STATE:', stateBox.innerText || stateBox.textContent || ''].join('\n');
+    const txt = buildStateDump();
     try{
       await navigator.clipboard.writeText(txt);
-      STATE.last = {state:'copied'};
     }catch(_e){
       prompt('Copy State dump', txt);
-      STATE.last = {state:'prompt'};
     }
-    dump();
   }
 
   function loadNormalBoard(board,n){
@@ -552,11 +573,12 @@ End memo.
     if(!txt) return;
 
     let obj;
-    try{ obj = JSON.parse(txt); }catch(_e){ STATE.err = 'Paste failed: invalid JSON'; dump(); return; }
+    try{ obj = JSON.parse(txt); }catch(_e){ STATE.err = 'Paste failed: invalid JSON'; render(); dump(); return; }
 
     const n = Math.trunc(+obj.size || 0);
     if(![5,6,7,8].includes(n) || !Array.isArray(obj.board)){
       STATE.err = 'Paste failed: missing or unsupported fields';
+      render();
       dump();
       return;
     }
@@ -581,67 +603,64 @@ End memo.
     }
 
     STATE.err = null;
-    STATE.last = {paste:'ok'};
+    STATE.lastAction = {paste:'ok'};
     render();
     dump();
   }
 
-  function dump(){
+  function boardToken(c){
+    if(c.t === 'e') return '.';
+    if(c.t === 'q') return '?';
+    if(c.t === 'f') return 'F';
+    if(c.t === 'n') return String(c.v);
+    if(c.t === 'w') return '[' + (c.s || []).map(sl => boardToken(sl)).join('') + ']';
+    return '.';
+  }
+
+  function buildStateDump(){
     const payload = buildIO();
     const n = payload.size|0;
-    const head = [];
-    if(STATE.err) head.push('ERROR: ' + STATE.err);
-    let nums=0, flags=0, qs=0, empties=0, ws=0;
+    const lines = ['SOLGIC STATE v1', '', `MODE: ${payload.mode}`, `ENGINE: ${activeEngine()}`, `SIZE: ${n}x${n}`, `TOTAL MINES: ${payload.mines}`, '', 'LEGEND:', '. = unopened', '? = opened safe', 'F = mine/flag'];
+    if(payload.mode === 'W') lines.push('[....] = four W slots in order');
+    lines.push('', 'BOARD:', '    ' + Array.from({length:n}, (_,x) => String.fromCharCode(65+x)).join(' '));
     for(let y=0;y<n;y++){
-      for(let x=0;x<n;x++){
-        const c = payload.board[y][x];
-        if(c.t === 'n' || c.t === 'p') nums++;
-        else if(c.t === 'f') flags++;
-        else if(c.t === 'q') qs++;
-        else if(c.t === 'w') ws++;
-        else empties++;
+      lines.push(`${y+1} | ${payload.board[y].map(boardToken).join(' ')}`);
+    }
+    lines.push('', 'CHANGES SINCE LAST INFERENCE:');
+    if(!STATE.orderActive) lines.push('(no inference yet)');
+    else{
+      if(STATE.inferenceMines !== STATE.mines) lines.push(`TOTAL MINES: ${STATE.inferenceMines} -> ${STATE.mines}`);
+      const changes = [];
+      for(let y=0;y<n;y++) for(let x=0;x<n;x++) if(STATE.order[y][x] != null){
+        changes.push({order:STATE.order[y][x], label:labelOf(x,y), value:boardToken(payload.board[y][x])});
+      }
+      changes.sort((a,b) => a.order-b.order);
+      for(const item of changes) lines.push(`${item.order}. ${item.label} = ${item.value}`);
+      if(!changes.length && STATE.inferenceMines === STATE.mines) lines.push('(none)');
+    }
+    lines.push('', 'LAST INFERENCE:');
+    const out = STATE.lastInference;
+    if(!out) lines.push('STATUS: NONE');
+    else{
+      lines.push(`STATUS: ${out.ok === false ? 'ERROR' : out.ok === true ? 'OK' : 'NO ENGINE'}`);
+      lines.push(`MINE: ${Array.isArray(out.mine) && out.mine.length ? out.mine.join(', ') : '—'}`);
+      lines.push(`SAFE: ${Array.isArray(out.safe) && out.safe.length ? out.safe.join(', ') : '—'}`);
+      lines.push(`EXHAUSTED: ${typeof out.exhausted === 'boolean' ? out.exhausted : 'unknown'}`);
+      if(STATE.inferenceMines !== STATE.mines) lines.push(`TOTAL MINES AT INFERENCE: ${STATE.inferenceMines}`);
+      if(out.sol !== undefined) lines.push(`SOLUTIONS: ${out.sol}`);
+      if(out.warning) lines.push(`WARNING: ${out.warning}`);
+      if(out.note) lines.push(`NOTE: ${out.note}`);
+      if(Array.isArray(out.checkLines) && out.checkLines.length){
+        lines.push('', 'CHECK:');
+        for(const line of out.checkLines) lines.push('- ' + line);
       }
     }
-    head.push(`MODE: ${payload.mode} | SIZE: ${n} | MINES: ${payload.mines}`);
-    head.push(`Nums:${nums} Flags:${flags} Qs:${qs} Wcells:${ws} Empty:${empties}`);
+    if(STATE.err) lines.push('', 'INPUT ERROR: ' + STATE.err);
+    return lines.join('\n');
+  }
 
-    const extra = [];
-    if(STATE.last){
-      if(STATE.last.note) extra.push(String(STATE.last.note));
-      if(Array.isArray(STATE.last.checkLines) && STATE.last.checkLines.length){
-        extra.push('', 'CHECK:');
-        for(const ln of STATE.last.checkLines) extra.push('- ' + ln);
-      }
-      if(Array.isArray(STATE.last.mine) || Array.isArray(STATE.last.safe)){
-        const mines = Array.isArray(STATE.last.mine) ? STATE.last.mine : [];
-        const safes = Array.isArray(STATE.last.safe) ? STATE.last.safe : [];
-        if(mines.length || safes.length){
-          extra.push('', 'DEDUCE:', 'MINE: ' + (mines.length ? mines.join(', ') : '—'), 'SAFE: ' + (safes.length ? safes.join(', ') : '—'));
-        }
-      }
-    }
-
-    const rows = [];
-    for(let y=0;y<n;y++){
-      const parts = [];
-      for(let x=0;x<n;x++){
-        const c = payload.board[y][x];
-        if(c.t === 'e') parts.push('.');
-        else if(c.t === 'q') parts.push('?');
-        else if(c.t === 'f') parts.push('F');
-        else if(c.t === 'n') parts.push(String(c.v));
-        else if(c.t === 'w'){
-          const s = (c.s||[]).map(sl => sl.t === 'n' ? String(sl.v) : sl.t === 'q' ? '?' : '.');
-          parts.push('[' + s.join('') + ']');
-        }else parts.push('?');
-      }
-      rows.push(parts.join(' '));
-    }
-
-    const parts = [head.join('\n')];
-    if(extra.length) parts.push(extra.join('\n'));
-    parts.push('', rows.join('\n'));
-    stateBox.textContent = parts.join('\n');
+  function dump(){
+    stateBox.textContent = buildStateDump();
   }
 
   function onKeyDown(e){
@@ -661,7 +680,7 @@ End memo.
       else{
         if(STATE.normal[y][x].kind !== 'flag'){
           STATE.normal[y][x] = {kind:'q'};
-          STATE.last = {x,y,value:'?',via:'key'};
+          STATE.lastAction = {x,y,value:'?',via:'key'};
           touchOrder(x,y);
         }
       }
@@ -690,7 +709,8 @@ End memo.
       }else if(STATE.normal[y][x].kind !== 'flag'){
         STATE.normal[y][x] = {kind:'empty'};
       }
-      STATE.last = {x,y,value:'clear'};
+      STATE.err = null;
+      STATE.lastAction = {x,y,value:'clear'};
       touchOrder(x,y);
       render();
       dump();
@@ -698,13 +718,12 @@ End memo.
   }
 
   function inferNow(){
-    if(!STATE.orderActive){
-      STATE.orderActive = true;
-      for(let y=0;y<STATE.n;y++) for(let x=0;x<STATE.n;x++) STATE.order[y][x] = null;
-    }
-
     clearMarks();
     const io = buildIO();
+    STATE.orderActive = true;
+    STATE.order = Array.from({length:STATE.n}, () => Array.from({length:STATE.n}, () => null));
+    STATE.inferenceBoard = io.board.map(row => row.map(boardToken));
+    STATE.inferenceMines = STATE.mines;
     let out;
     if(STATE.mode === 'q'){
       if(typeof inferQ !== 'function') out = {ok:false, checkLines:['engine-q.js not loaded'], safe:[], mine:[], sol:0};
@@ -721,9 +740,9 @@ End memo.
     }else{
       out = {note:'(no engine)', safe:[], mine:[]};
     }
-    STATE.last = Object.assign({infer:'done'}, out && typeof out === 'object' ? out : {});
-    applyDeductions(STATE.last);
-    updateEngineInfo();
+    STATE.lastInference = out && typeof out === 'object' ? out : {ok:false, note:'Invalid engine response', safe:[], mine:[]};
+    applyDeductions(STATE.lastInference);
+    STATE.err = null;
     render();
     dump();
   }
@@ -736,9 +755,12 @@ End memo.
   minesInp.addEventListener('change', () => {
     const cap = STATE.n * STATE.n;
     STATE.mines = clamp(Math.trunc(+minesInp.value || 0), 0, cap);
+    STATE.err = null;
     minesInp.value = String(STATE.mines);
-    STATE.last = {mines:STATE.mines};
+    STATE.lastAction = {mines:STATE.mines};
     minesPresetSel.value = ['8','10','14','20','26'].includes(String(STATE.mines)) ? String(STATE.mines) : '';
+    clearMarks();
+    render();
     dump();
   });
   minesPresetSel.addEventListener('change', () => {

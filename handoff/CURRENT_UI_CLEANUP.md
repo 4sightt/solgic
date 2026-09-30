@@ -211,11 +211,7 @@ CHECK:
 
 ## 작업 결과
 
-아직 미작업.
-
-Codex/Cowork가 작업한 뒤 아래를 갱신한다.
-
-- 변경 파일:
-- 핵심 변경:
-- 테스트/검증:
-- 남은 문제:
+- 변경 파일: `index.html`, `engine-q.js`, `engine-2g.js`, `tests/ui-state.test.js`, 이 문서. 엔진 두 파일의 변경은 작업 중 `main`의 `df02183`에 반영되었다.
+- 핵심 변경: Quad 엔진의 DOM/MutationObserver 패치를 제거하고, UI에서 활성 모드의 엔진 버전을 표시한다. 2G 버전을 브라우저에 명시적으로 등록했다. `STATE.lastAction`과 `STATE.lastInference`를 분리하여 복사·선택·입력 후에도 직전 추론 요약을 유지한다. 화면의 State와 State 버튼 복사는 같은 `SOLGIC STATE v1` 생성 함수를 사용한다. 보드, 모드, 엔진, 총 지뢰 수, 열린 안전칸 `?`의 의미, 마지막 추론 요약/검사 내용, 추론 이후 변경된 칸의 최종값을 담고 raw `proofs`는 제외한다. 변경 badge/목록은 매 추론 시 초기화되며 기준 상태로 되돌린 칸은 목록에서 제거한다. 모드·크기·붙여넣기·Clear는 해당 보드의 추론 기준을 초기화한다.
+- 테스트/검증: `node tests/engine-2f.test.js` 6/6 통과. `node tests/ui-state.test.js` 통과(활성 엔진 표시, State/IO 복사와 JSON 붙여넣기, 추론 유지, 변경 순서/초기화, W 표현). `git diff --check` 통과. 인라인 스크립트 구문 검사 통과. 브라우저의 로컬 `file://` 접근이 도구 보안 정책으로 거부되어 실제 브라우저 화면 검증은 수행하지 못했다.
+- 남은 문제: 실제 브라우저에서 배치와 클릭 흐름의 육안 확인은 미검증이다. solver 추론 알고리즘과 2B/Common Proof Engine은 이번 범위에서 변경하지 않았다.
