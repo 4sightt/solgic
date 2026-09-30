@@ -41,3 +41,10 @@ Quad는 `solgic3_quad_solver_source.md`, Connected/2C는 `solgic3_2c_solver_sour
 - `?`는 unknown이 아니라 열린 안전칸이다.
 - 사용자 표시 좌표는 `A1`, `C3` 형식을 사용한다.
 - 새 모드는 가능하면 독립 엔진 파일로 분리한다.
+
+## Handoff
+
+- 에이전트/세션 간 작업 인계는 `handoff/` 폴더를 사용한다.
+- 현재 진행 중인 작업이 있으면 `CURRENT_CONTEXT.md` 다음으로 `handoff/README.md`와 관련 `CURRENT_*.md` 문서를 읽는다.
+- 작업을 마친 에이전트는 해당 handoff 문서의 작업 결과를 갱신한다.
+
