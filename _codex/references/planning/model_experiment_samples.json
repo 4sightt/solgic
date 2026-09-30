@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "project": "Solgic",
+  "purpose": "Compare model × mode × environment efficiency by Solgic task type without creating a global model ranking.",
+  "canonical_repository": "4sightt/solgic",
+  "sample_count": 1,
+  "counts_by_date": {
+    "2026-09-30": 1
+  },
+  "samples": [
+    {
+      "sample_id": "SOLGIC-20260930-001",
+      "date": "2026-09-30",
+      "provider": "ChatGPT",
+      "environment": "Codex / local Solgic repo",
+      "model": "GPT-6 Sol",
+      "mode": "High",
+      "task": "UI / State protocol cleanup",
+      "duration": "00:17:31",
+      "started_at": "2026-09-30T17:05:17+09:00",
+      "ended_at": "2026-09-30T17:22:48+09:00",
+      "quota_observation": {
+        "five_hour": {
+          "metric": "remaining",
+          "before_percent": 60,
+          "after_percent": 52,
+          "delta_pp": -8
+        },
+        "weekly": {
+          "metric": "remaining",
+          "before_percent": 42,
+          "after_percent": 41,
+          "delta_pp": -1
+        }
+      },
+      "detail_history": "../../history/model_experiments/2026-09-30.md#solgic-20260930-001",
+      "invocation": "Codex task on connected local Solgic repository; complete implementation, validation, handoff update, commit and push.",
+      "artifacts": [
+        "index.html",
+        "engine-q.js",
+        "engine-2g.js",
+        "tests/ui-state.test.js",
+        "handoff/CURRENT_UI_CLEANUP.md",
+        "commit:0f975c533e4e872718402d2e227b2816fad0d556",
+        "commit:df0218331dd0a140b3726a2fcc59c0a4bedc6a48"
+      ],
+      "outcome": {
+        "status": "implemented_tested_committed_pushed",
+        "tests": [
+          "tests/engine-2f.test.js 6/6 passed",
+          "tests/ui-state.test.js passed",
+          "git diff --check passed",
+          "inline script syntax check passed"
+        ],
+        "regression_detected": false,
+        "rework_required_so_far": false,
+        "push_completed": true,
+        "browser_verification": "Codex could not independently open local file:// due to browser policy. User-provided browser screenshot visually confirmed normal rendering of the new State panel and existing board layout; full click-flow browser verification remains unverified."
+      }
+    }
+  ]
+}
